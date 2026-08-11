@@ -11,6 +11,5 @@ services:
       - key: DEMO_USERNAME
         value: demo
       - key: DEMO_PASSWORD
-        value: demo1234
-        sync: false # pozwala nadpisać z dashboardu Render bez konfliktu przy kolejnych deployach z tego pliku
+        value: demo1234 # nie-sekret (patrz nagłówek pliku) — Render nie pozwala łączyć `value` z `sync: false`
     autoDeploy: true
