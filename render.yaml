@@ -1,0 +1,16 @@
+# Render Blueprint. Szkielet do dopracowania w docs/PLAN.md Faza 4 (rola `devops`) — wartości poniżej to
+# bezpieczne (nie-sekretne) domyślne dla konta demo, nie prawdziwe poświadczenia.
+services:
+  - type: web
+    name: omnis-mock
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: DEMO_USERNAME
+        value: demo
+      - key: DEMO_PASSWORD
+        value: demo1234
+        sync: false # pozwala nadpisać z dashboardu Render bez konfliktu przy kolejnych deployach z tego pliku
+    autoDeploy: true

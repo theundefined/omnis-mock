@@ -1,0 +1,82 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Co to jest
+
+Mock serwera Ex Libris Primo/OMNIS API (pełny kontrakt: `docs/SPEC.md`) — jedno stałe konto demo, fałszywe
+wypożyczenia, zero połączenia z prawdziwą biblioteką. Powstał, bo `omnis-mobile` wymaga w Google Play danych
+logowania do testów, a nikt w tym ekosystemie nie administruje siecią OMNIS — zamiast podawać czyjeś
+prawdziwe dane, wystawiamy publiczny mock pod (docelowo) `unofficial-omnis.aramin.net`.
+
+Część większego ekosystemu opisanego w `../CLAUDE.md` (workspace `bracz`) — `omnis-py` jest źródłem prawdy
+o kształcie prawdziwego API; ten projekt go odzwierciedla po stronie serwera, niezależnie od niego (nie
+zależy od `omnis-py` w runtime, tylko jako dev-dependency do testu kontraktowego — patrz niżej).
+
+## Ten projekt jest zaprojektowany pod pracę z subagentami — przeczytaj to przed czymkolwiek innym
+
+`docs/PLAN.md` to fazowy plan z trzema rolami, zdefiniowanymi jako custom subagenty w `.claude/agents/`:
+`developer`, `qa`, `devops`. Jeśli orkiestrujesz pracę nad tym repo:
+
+1. Przeczytaj `docs/SPEC.md` (kontrakt — CO) i `docs/PLAN.md` (fazy, kryteria wyjścia — JAK/KIEDY) zanim
+   zaczniesz cokolwiek zmieniać.
+2. Uruchamiaj role przez `Agent` tool z `subagent_type` odpowiadającym nazwie pliku w `.claude/agents/`, w
+   kolejności faz z `PLAN.md`. Nie pomijaj Fazy 2 (QA) nawet jeśli developer twierdzi, że skończył i testy
+   są zielone — `docs/SPEC.md` wprost tłumaczy, dlaczego zielony `pytest` to nie to samo co zgodność ze
+   specyfikacją.
+3. `qa` celowo nie ma dostępu do `Write`/`Edit`. Jeśli subagent w tej roli zaczyna edytować kod zamiast
+   raportować do `docs/QA_REPORT.md`, to sygnał, że coś jest nie tak z rolą/promptem, nie że "QA jest
+   szybszy, jak może naprawiać na bieżąco".
+4. Faza 4 (`devops`, wdrożenie na Render) ma twardy warunek wejścia: PASS w `docs/QA_REPORT.md`. Nie
+   deployuj bez tego, nawet jeśli kod "wygląda gotowo".
+
+## Komendy
+
+```bash
+pip install -e ".[dev]"
+pytest -v                              # patrz uwaga niżej — to NIE są zwykłe testy jednostkowe
+ruff check src
+black --check src
+uvicorn omnis_mock.main:app --reload   # lokalny serwer, http://localhost:8000
+```
+
+**`tests/test_contract.py` nie mockuje `omnis.client` — instaluje i uruchamia prawdziwy `OmnisClient` z PyPI
+(`omnis-py`, dev-dependency w `pyproject.toml`) przeciwko lokalnie odpalonej instancji FastAPI, przez
+`httpx.ASGITransport` (bez prawdziwego portu sieciowego).** To świadoma decyzja architektoniczna: jeśli
+prawdziwe modele Pydantic klienta parsują odpowiedź mocka bez `ValidationError`, kontrakt trzyma się
+silniej niż jakiekolwiek ręcznie pisane assercje. Ten plik jest kontraktem QA (patrz `.claude/agents/qa.md`)
+— rola `developer` doprowadza go do zielonego stanu, ale go nie edytuje.
+
+## Architektura
+
+```
+src/omnis_mock/
+  main.py    FastAPI — routing; dokładny kształt JSON per endpoint w docs/SPEC.md (REQ-1..REQ-14)
+  auth.py    fake JWT (3 segmenty, payload ASCII-only — REQ-4) + rejestr ważnych tokenów (in-memory)
+  data.py    fixture wypożyczeń demo-konta + stan po renew_loan (in-memory, resetowany co proces)
+```
+
+Celowo brak bazy danych — to jednorazowy, bezstanowy między restartami mock, nie produkcyjny system.
+`main.py` obecnie ma stuby (`HTTPException(501, ...)`) dla wszystkiego poza `/healthz`, `/discovery/search`
+i `/primaws/rest/pub/pnxs` (te trzy nie mają ambiwalencji projektowej, więc są już zaimplementowane w
+szkielecie) — reszta czeka na Fazę 1 z `docs/PLAN.md`.
+
+## Nieoczywiste pułapki (pełne wyjaśnienie: docs/SPEC.md)
+
+- `Loan` w `omnis-py` ma dokładnie 10 wymaganych kluczy — brak jednego to `ValidationError` u KAŻDEGO
+  klienta w ekosystemie (`omnis-py`, `omnis-android`), nie tylko w tym mocku.
+- `myaccount/counters` i `myaccount/fines` (drugi poza zakresem Layer 1) używają DWÓCH RÓŻNYCH formatów
+  kwoty (`"0.00"` vs `"0,20 PLN"`) — ten sam serwer, dwa formaty. Mylenie ich to najłatwiejszy sposób, żeby
+  implementacja wyglądała poprawnie, a i tak wywaliła klienta.
+- `get_loans()` w `omnis-py` paginuje w pętli `while` dopóki `showmore` zawiera `"Y"` — fixture z
+  `showmore: ["Y"]` i < 50 rekordów zawiesza klienta w NIESKOŃCZONEJ pętli HTTP, nie zwraca błędu. Jedyna
+  pułapka w tym API, która realnie "wiesza" aplikację kliencką zamiast tylko zwracać złe dane.
+- `omnis-mobile` ma w pełni podpiętą pod UI wyszukiwarkę katalogu (`SearchScreen`), mimo że ten mock
+  (Layer 1) jej nie implementuje — `/primaws/rest/pub/pnxs` musi zwracać `{"docs": []}`, inaczej reviewer
+  trafi na ekran błędu zamiast pustego wyniku.
+- Render (darmowy tier) usypia po bezczynności — sprawdź timeouty klienta PRZED poleganiem na tym jako
+  koncie testowym dla Google Play (`docs/PLAN.md`, Faza 4) — inaczej mock istnieje, ale recenzent i tak
+  dostanie błąd logowania przy pierwszej próbie.
+- Test kontraktowy w Pythonie (`tests/test_contract.py`) NIE dowodzi, że Kotlinowy klient (`omnis-mobile`)
+  też sparsuje odpowiedź poprawnie — inne (non-null) typy, inna serializacja. Weryfikacja Kotlina jest
+  ręczna (`docs/PLAN.md`, Faza 5) i nie jest pokryta żadnym automatycznym testem w tym repo.
