@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Mock serwera Ex Libris Primo/OMNIS API (pełny kontrakt: `docs/SPEC.md`) — jedno stałe konto demo, fałszywe
 wypożyczenia, zero połączenia z prawdziwą biblioteką. Powstał, bo `omnis-mobile` wymaga w Google Play danych
 logowania do testów, a nikt w tym ekosystemie nie administruje siecią OMNIS — zamiast podawać czyjeś
-prawdziwe dane, wystawiamy publiczny mock pod (docelowo) `unofficial-omnis.aramin.net`.
+prawdziwe dane, wystawiamy publiczny mock pod https://omnis-mock.onrender.com (własna domena była
+rozważana, ale świadomie odrzucona — brak realnej korzyści, patrz `docs/DEPLOY_NOTES.md`).
 
 Część większego ekosystemu opisanego w `../CLAUDE.md` (workspace `bracz`) — `omnis-py` jest źródłem prawdy
 o kształcie prawdziwego API; ten projekt go odzwierciedla po stronie serwera, niezależnie od niego (nie

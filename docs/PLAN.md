@@ -75,6 +75,12 @@ Nie zaczynaj tej fazy przed PASS w Fazie 2 — Layer 1 to jedyna rzecz wymagana 
 
 ## Faza 4 — `devops`: wdrożenie na Render
 
+**Status: wykonane.** Wynik w `docs/DEPLOY_NOTES.md` — publiczny URL: https://omnis-mock.onrender.com.
+Własna domena (`unofficial-omnis.aramin.net`) była rozważana, ale świadomie odrzucona: bez realnej korzyści
+funkcjonalnej (rozróżnienie "nieoficjalne" i tak jest w nazwie tenanta widocznej w apce, nie w domenie),
+jedyna faktyczna zaleta (przenośność między dostawcami hostingu) nie była warta dodatkowego kroku na tym
+etapie. Poniższe zadania zostają jako opis fazy na wypadek ponownego wdrożenia (np. po zmianie dostawcy).
+
 **Warunek wejścia:** `docs/QA_REPORT.md` = PASS.
 
 **Zadania:**
@@ -90,11 +96,9 @@ Nie zaczynaj tej fazy przed PASS w Fazie 2 — Layer 1 to jedyna rzecz wymagana 
    `docs/DEPLOY_NOTES.md` i zapytać użytkownika.
 5. Smoke test na żywym URL-u — ten sam scenariusz co `tests/test_contract.py`, ale przeciwko publicznemu
    adresowi (nie commitować tymczasowej zmiany `base_url`).
-6. Instrukcja CNAME `unofficial-omnis.aramin.net` → adres Render — devops jej NIE wykonuje (brak dostępu do
-   DNS użytkownika), tylko dokładnie opisuje krok w `docs/DEPLOY_NOTES.md`.
 
 **Wyjście:** `docs/DEPLOY_NOTES.md` — publiczny URL, wynik smoke testu, zmierzony cold start, rekomendacja
-dot. timeoutów klienta, instrukcja CNAME.
+dot. timeoutów klienta.
 
 **Bezpieczeństwo:** pierwszy `git push` / podłączenie repo do Render to akcja z realnym blast radius (publiczny
 URL) — potwierdzić z użytkownikiem przed wykonaniem, nie zakładać zgody z wcześniejszej rozmowy.

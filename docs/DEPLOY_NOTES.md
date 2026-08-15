@@ -76,16 +76,17 @@ instance will spin down with inactivity, which can delay requests by 50 seconds 
 
 **To pozostaje otwarte — nie została podjęta decyzja, którą opcję wybrać.**
 
-## CNAME — do wykonania przez użytkownika (brak dostępu do DNS `aramin.net`)
+## Własna domena — rozważona i odrzucona
 
-- Rekord: `unofficial-omnis.aramin.net` → `omnis-mock.onrender.com` (CNAME)
-- Gdzie ustawić: panel DNS domeny `aramin.net` (poza zasięgiem tej sesji — brak dostępu do tego konta)
-- Po ustawieniu: dodać niestandardową domenę w Render (Settings → Custom Domains) i poczekać na
-  wystawienie certyfikatu TLS przez Render (automatyczne, Let's Encrypt).
+Rozważano CNAME `unofficial-omnis.aramin.net` → `omnis-mock.onrender.com`. Świadomie zrezygnowano: brak
+realnej korzyści funkcjonalnej (rozróżnienie "nieoficjalne" jest w nazwie tenanta widocznej w apce, nie w
+domenie), jedyna faktyczna zaleta własnej domeny — przenośność między dostawcami hostingu — nie była warta
+dodatkowego kroku na tym etapie. Do ewentualnego ponownego rozważenia, jeśli/gdy dojdzie do zmiany dostawcy
+(patrz opcje w sekcji cold-start wyżej). Docelowy, trwały URL to https://omnis-mock.onrender.com.
 
 ## Werdykt
 
 - [x] Serwis żywy i działający poprawnie (smoke test PASS)
+- [x] Własna domena — zamknięte, nie planowana (patrz wyżej)
 - [ ] **Wymaga decyzji użytkownika przed użyciem jako konto testowe w Google Play Console**: ryzyko
   cold-start vs. timeout klienta (patrz wyżej) — bez tego recenzent może trafić na losowy błąd logowania
-- [ ] CNAME nie ustawiony (wymaga dostępu do DNS `aramin.net`, poza zasięgiem tej sesji)

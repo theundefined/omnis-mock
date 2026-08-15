@@ -9,9 +9,9 @@ go zaktualizuje.
 
 Mock serwera Ex Libris Primo / OMNIS, wystarczający by prawdziwi klienci (`omnis-py`, `omnis-mobile`,
 `omnis-android`, `omnis-ha`) mogły się zalogować na jedno stałe konto demo, zobaczyć wypożyczenia i je
-prolongować — **bez** dostępu do jakiejkolwiek prawdziwej biblioteki. Docelowo dostępny pod
-`unofficial-omnis.aramin.net`, m.in. jako konto testowe dla recenzenta Google Play (autor `omnis-mobile` nie
-jest administratorem sieci OMNIS i nie może podać prawdziwych danych logowania).
+prolongować — **bez** dostępu do jakiejkolwiek prawdziwej biblioteki. Dostępny pod
+https://omnis-mock.onrender.com, m.in. jako konto testowe dla recenzenta Google Play (autor `omnis-mobile`
+nie jest administratorem sieci OMNIS i nie może podać prawdziwych danych logowania).
 
 ## Zakres — Layer 1 (wymagane, ta faza)
 

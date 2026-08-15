@@ -5,8 +5,9 @@ do jakiejkolwiek prawdziwej biblioteki. Powstał, bo `omnis-mobile` (apka na And
 wymaga w Google Play danych logowania do testów, a autor nie jest administratorem sieci OMNIS — więc zamiast
 podawać czyjeś prawdziwe dane logowania recenzentowi, wystawiamy publiczny, samowystarczalny mock.
 
-Docelowo wdrożony pod `unofficial-omnis.aramin.net` — nazwa celowo jednoznacznie oznaczona jako
-"nieoficjalna", żeby nie sugerować związku z realną siecią OMNIS.
+Wdrożony pod https://omnis-mock.onrender.com. Rozważaliśmy własną domenę (`unofficial-omnis.aramin.net`),
+ale zrezygnowaliśmy — bez realnej korzyści funkcjonalnej, a rozróżnienie "to nie prawdziwe OMNIS" i tak jest
+jawnie widoczne w nazwie tenanta w apce ("Nieoficjalna Biblioteka OMNIS (Demo)"), niezależnie od domeny.
 
 Część większego ekosystemu opisanego w `../CLAUDE.md` (workspace `bracz`): `omnis-py` jest źródłem prawdy o
 kształcie prawdziwego API Primo, ten projekt go odzwierciedla po stronie serwera dla celów testowych/demo.

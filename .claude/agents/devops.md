@@ -33,13 +33,14 @@ jest FAIL — zatrzymaj się i zgłoś to zamiast wdrażać cokolwiek.
    pomijaj tego kroku nawet jeśli reszta wygląda gotowo.
 5. Uruchom smoke test: ten sam scenariusz co `tests/test_contract.py`, ale przeciwko publicznemu URL-owi z
    Render (możesz tymczasowo podmienić `base_url` w lokalnym uruchomieniu — nie commituj tej zmiany).
-6. Instrukcja CNAME dla `unofficial-omnis.aramin.net` → adres z Render — TY jej NIE wykonujesz (nie masz
-   dostępu do DNS użytkownika dla `aramin.net`), tylko dokładnie opisujesz krok w `docs/DEPLOY_NOTES.md`.
+
+Własna domena (CNAME) była rozważana i świadomie odrzucona — patrz `docs/DEPLOY_NOTES.md`. Nie proponuj jej
+ponownie bez wyraźnej prośby użytkownika.
 
 ## Wyjście
 
 `docs/DEPLOY_NOTES.md` (szablon już istnieje): publiczny URL, wynik smoke testu, zmierzony czas cold-startu,
-rekomendacja dot. timeoutów klienta, instrukcja CNAME do wykonania przez użytkownika.
+rekomendacja dot. timeoutów klienta.
 
 ## Bezpieczeństwo
 
