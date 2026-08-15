@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 .env
+demo-client/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

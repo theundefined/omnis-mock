@@ -13,17 +13,20 @@ kształcie prawdziwego API Primo, ten projekt go odzwierciedla po stronie serwer
 
 ## Status
 
-Szkielet + kompletna specyfikacja/plan. Implementacja endpointów jeszcze nie istnieje — `pytest` jest celowo
-czerwony do czasu Fazy 1 (patrz `docs/PLAN.md`).
+**Layer 1 zaimplementowany, przetestowany (QA: PASS, `docs/QA_REPORT.md`) i wdrożony:
+https://omnis-mock.onrender.com.** Layer 2 (pełna wyszukiwarka katalogu) to opcjonalna, nie zaczęta jeszcze
+Faza 3 — patrz `docs/PLAN.md`. Znane, nierozwiązane jeszcze ryzyko: cold start darmowego tieru Render vs.
+timeout klienta w `omnis-mobile` — patrz `docs/DEPLOY_NOTES.md`.
 
 ## Zacznij tutaj
 
 - **`docs/SPEC.md`** — kontrakt API: dokładny kształt JSON per endpoint, wymagane pola, znane pułapki.
-  Jedyne źródło prawdy o tym, CO zbudować.
+  Jedyne źródło prawdy o tym, CO ten serwer robi.
 - **`docs/PLAN.md`** — fazowy plan realizacji z rolami `developer`/`qa`/`devops` (zdefiniowanymi jako custom
   subagenty w `.claude/agents/`), kryteriami wyjścia z każdej fazy.
-- **`tests/test_contract.py`** — już napisany, celowo czerwony: uruchamia prawdziwy `OmnisClient` z
-  opublikowanej paczki `omnis-py` przeciwko temu serwerowi. Zielony = kontrakt spełniony.
+- **`docs/QA_REPORT.md`** / **`docs/DEPLOY_NOTES.md`** — wynik niezależnej weryfikacji i stan wdrożenia.
+- **`tests/test_contract.py`** — uruchamia prawdziwy `OmnisClient` z opublikowanej paczki `omnis-py`
+  przeciwko temu serwerowi. Zielony = kontrakt spełniony (silniejszy test niż ręczne assercje).
 
 ## Szybki start (lokalnie)
 
@@ -35,6 +38,20 @@ pip install -e ".[dev]"
 uvicorn omnis_mock.main:app --reload   # http://localhost:8000
 pytest -v                              # w drugim terminalu
 ```
+
+## Ręczne testowanie API
+
+- **`scripts/curl/`** — gotowe skrypty `curl`, po jednym na endpoint/REQ z `docs/SPEC.md`, plus
+  `run_all.sh` z podsumowaniem PASS/FAIL. Działają przeciwko `localhost` albo (ustawiając `BASE_URL`)
+  przeciwko żywemu deployowi na Render. Szczegóły: `scripts/curl/README.md`.
+- **`scripts/setup_demo_client.sh`** — tworzy izolowany venv z prawdziwym `omnis-py` z PyPI,
+  skonfigurowanym pod tego mocka (`omnis-cli` gotowe do użycia bez dotykania prawdziwego
+  `~/.config/omnis-py/config.yaml`):
+  ```bash
+  ./scripts/setup_demo_client.sh                                   # przeciwko localhost:8000
+  ./scripts/setup_demo_client.sh https://omnis-mock.onrender.com   # przeciwko żywemu deployowi
+  ./demo-client/bin/omnis-cli-demo --renew
+  ```
 
 ## Dlaczego Render (darmowy hosting)
 

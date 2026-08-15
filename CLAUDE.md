@@ -24,6 +24,12 @@ zależy od `omnis-py` w runtime, tylko jako dev-dependency do testu kontraktoweg
    kolejności faz z `PLAN.md`. Nie pomijaj Fazy 2 (QA) nawet jeśli developer twierdzi, że skończył i testy
    są zielone — `docs/SPEC.md` wprost tłumaczy, dlaczego zielony `pytest` to nie to samo co zgodność ze
    specyfikacją.
+   **Uwaga (sprawdzone empirycznie):** `subagent_type: "qa"`/`"developer"`/`"devops"` NIE działa, jeśli
+   katalog roboczy sesji to `bracz/` (workspace nadrzędny), a nie `omnis-mock/` — harness nie skanuje
+   zagnieżdżonych `.claude/agents/`. W takiej sytuacji użyj `subagent_type: "general-purpose"` i wklej
+   całą treść odpowiedniego pliku z `.claude/agents/` wprost do prompta (tak jak to zrobiono w Fazie 2) —
+   to jedyny sposób, żeby zachować ograniczenia roli (np. brak `Write`/`Edit` dla QA), skoro sam agent
+   ogólnego przeznaczenia ma pełny dostęp do narzędzi.
 3. `qa` celowo nie ma dostępu do `Write`/`Edit`. Jeśli subagent w tej roli zaczyna edytować kod zamiast
    raportować do `docs/QA_REPORT.md`, to sygnał, że coś jest nie tak z rolą/promptem, nie że "QA jest
    szybszy, jak może naprawiać na bieżąco".
@@ -38,6 +44,15 @@ pytest -v                              # patrz uwaga niżej — to NIE są zwyk�
 ruff check src
 black --check src
 uvicorn omnis_mock.main:app --reload   # lokalny serwer, http://localhost:8000
+
+# Ręczne testowanie API bez pytest (przydatne przeciwko żywemu deployowi na Render, gdzie pytest
+# się nie odpala) — patrz scripts/curl/README.md:
+BASE_URL=https://omnis-mock.onrender.com scripts/curl/run_all.sh
+
+# Izolowany venv z prawdziwym omnis-py z PyPI, skonfigurowanym pod tego mocka (NIE dotyka
+# prawdziwego ~/.config/omnis-py/config.yaml użytkownika):
+./scripts/setup_demo_client.sh [BASE_URL]
+./demo-client/bin/omnis-cli-demo --renew
 ```
 
 **`tests/test_contract.py` nie mockuje `omnis.client` — instaluje i uruchamia prawdziwy `OmnisClient` z PyPI
@@ -57,9 +72,13 @@ src/omnis_mock/
 ```
 
 Celowo brak bazy danych — to jednorazowy, bezstanowy między restartami mock, nie produkcyjny system.
-`main.py` obecnie ma stuby (`HTTPException(501, ...)`) dla wszystkiego poza `/healthz`, `/discovery/search`
-i `/primaws/rest/pub/pnxs` (te trzy nie mają ambiwalencji projektowej, więc są już zaimplementowane w
-szkielecie) — reszta czeka na Fazę 1 z `docs/PLAN.md`.
+Layer 1 (login/counters/loans/renew_loans + bezpiecznik `/pnxs`) w pełni zaimplementowany i zweryfikowany
+niezależnie przez QA (`docs/QA_REPORT.md`: PASS) oraz wdrożony (`docs/DEPLOY_NOTES.md`). Layer 2 (pełna
+wyszukiwarka katalogu) to nierozpoczęta jeszcze, opcjonalna Faza 3 z `docs/PLAN.md`.
+
+`scripts/curl/` i `scripts/setup_demo_client.sh` — narzędzia do ręcznego eksplorowania API (patrz sekcja
+Komendy wyżej i `scripts/curl/README.md`); `demo-client/` (generowane przez ten drugi skrypt) jest
+gitignored, nigdy nie commitować.
 
 ## Nieoczywiste pułapki (pełne wyjaśnienie: docs/SPEC.md)
 
