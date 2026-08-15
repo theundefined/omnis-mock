@@ -148,9 +148,15 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
 
 - **`GET /`** — strona statusu (HTML): wersja (`__version__`), commit (z `RENDER_GIT_COMMIT`, jeśli
   wdrożone na Render — lokalnie po prostu "dev"), uptime procesu, link do repo na GitHubie, link do
-  `docs/SPEC.md`, i dane konta demo (login/hasło) — pokazane wprost, bo to jawnie nie-sekret (patrz
-  "Dane demo" wyżej), a to ułatwia komuś wypróbowanie apki bez szukania w dokumentacji. Musi zawierać
+  `docs/SPEC.md`, i dane konta demo (login/hasło/**base_url**) — pokazane wprost, bo to jawnie nie-sekret
+  (patrz "Dane demo" wyżej), a to ułatwia komuś wypróbowanie apki bez szukania w dokumentacji. Musi zawierać
   wyraźne zastrzeżenie "to nie jest prawdziwa biblioteka/OMNIS".
+  - **`base_url` MUSI być wyliczony z requestu** (`_external_base_url()` w `main.py`: nagłówki
+    `X-Forwarded-Proto`/`X-Forwarded-Host`, z fallbackiem na `request.url`), **NIE hardkodowany** jako
+    konkretna domena (Render czy jakakolwiek inna) — ten sam kod ma pokazywać poprawną wartość niezależnie
+    od tego, pod jakim URL-em serwis akurat żyje (localhost, Render, ewentualna przyszła zmiana hostingu).
+    To bezpośrednia konsekwencja decyzji o nietrzymaniu się jednej konkretnej domeny (patrz
+    `docs/DEPLOY_NOTES.md`, sekcja "Własna domena").
 - **`GET /robots.txt`** — `Disallow: /` dla wszystkich botów. Razem z meta-tagiem `noindex` na stronie
   statusu: to publiczny mock pod ogólnodostępnym URL-em, nie chcemy, żeby wyszukiwarki go zindeksowały i
   ktoś trafił tu myśląc, że to prawdziwa biblioteka.

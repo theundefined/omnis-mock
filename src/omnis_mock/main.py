@@ -34,12 +34,26 @@ def _uptime_str() -> str:
     return f"{seconds}s"
 
 
-@app.get("/", response_class=HTMLResponse)
-async def status_page() -> str:
-    """Strona statusu (SPEC.md, "Endpointy pomocnicze") — czysto informacyjna, nie testowana przez
-    tests/test_contract.py. Pokazuje dane konta demo wprost (nie-sekret, patrz SPEC.md "Dane demo"),
-    żeby ktokolwiek trafiający tu bezpośrednio wiedział, jak spróbować apki bez szukania w dokumentacji.
+def _external_base_url(request: Request) -> str:
+    """Base URL tak, jak widzi go świat na zewnątrz — z nagłówków X-Forwarded-Proto/-Host, jeśli obecne
+    (Render/Cloudflare je ustawiają), inaczej z samego request.url. CELOWO nie hardkoduje żadnej domeny
+    (Render czy innej) — ten sam kod pokazuje poprawny URL na localhost, na Render, i na jakimkolwiek
+    przyszłym hostingu/domenie bez zmiany. Nie polega na `--proxy-headers` uvicorna (i jego zawężeniu do
+    zaufanych IP), tylko czyta nagłówki wprost — prościej i przewidywalnie za dowolnym reverse proxy.
     """
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+    return f"{scheme}://{host}"
+
+
+@app.get("/", response_class=HTMLResponse)
+async def status_page(request: Request) -> str:
+    """Strona statusu (SPEC.md, "Endpointy pomocnicze") — czysto informacyjna, nie testowana przez
+    tests/test_contract.py. Pokazuje dane konta demo wprost (nie-sekret, patrz SPEC.md "Dane demo") razem
+    z base_url wyliczonym z requestu (patrz _external_base_url), żeby ktokolwiek trafiający tu bezpośrednio
+    miał komplet danych do skonfigurowania klienta bez szukania w dokumentacji.
+    """
+    base_url = _external_base_url(request)
     commit_html = (
         f'<a href="{_GITHUB_URL}/commit/{_COMMIT}"><code>{_COMMIT[:7]}</code></a>'
         if _COMMIT
@@ -88,6 +102,7 @@ async def status_page() -> str:
 
   <h2>Konto demo</h2>
   <dl>
+    <dt>Base URL</dt><dd><code>{base_url}</code></dd>
     <dt>Login</dt><dd><code>{data.DEMO_USERNAME}</code></dd>
     <dt>Hasło</dt><dd><code>{data.DEMO_PASSWORD}</code></dd>
     <dt>Institution / View</dt><dd><code>MOCK</code> / <code>MOCK:MOCK</code></dd>

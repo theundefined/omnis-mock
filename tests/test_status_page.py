@@ -40,3 +40,21 @@ async def test_robots_txt_disallows_everything(client: httpx.AsyncClient) -> Non
     response = await client.get("/robots.txt")
     assert response.status_code == 200
     assert "Disallow: /" in response.text
+
+
+async def test_status_page_base_url_defaults_to_request_host(client: httpx.AsyncClient) -> None:
+    """Bez nagłówków X-Forwarded-* — base_url pochodzi wprost z requestu (tu: base_url klienta testowego),
+    nie z żadnej hardkodowanej domeny (SPEC.md, "Endpointy pomocnicze")."""
+    response = await client.get("/")
+    assert "http://mock.local" in response.text
+
+
+async def test_status_page_base_url_honors_forwarded_headers(client: httpx.AsyncClient) -> None:
+    """Z X-Forwarded-Proto/-Host (tak jak ustawia je Render/Cloudflare) — base_url musi odzwierciedlać
+    PRAWDZIWY zewnętrzny adres, nie surowe (wewnętrzne) request.url."""
+    response = await client.get(
+        "/",
+        headers={"X-Forwarded-Proto": "https", "X-Forwarded-Host": "omnis-mock.example.com"},
+    )
+    assert "https://omnis-mock.example.com" in response.text
+    assert "http://mock.local" not in response.text
