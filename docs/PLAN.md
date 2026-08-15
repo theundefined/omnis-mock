@@ -64,14 +64,20 @@ test nie pokrywa dosłownie (np. dokładny kod błędu przy nieznanym `loan_id`)
 **Wyjście:** `docs/QA_REPORT.md` z jednoznacznym werdyktem. FAIL → wraca do developera z konkretną listą.
 PASS → można przejść do Fazy 4 (deploy) albo Fazy 3 (stretch), wg decyzji użytkownika.
 
-## Faza 3 — `developer` + `qa`: Layer 2 (opcjonalna, stretch)
+## Faza 3 — Layer 2 (wyszukiwarka katalogu) — **zrobione**
 
 Pełny mock wyszukiwarki katalogu: `/primaws/rest/pub/pnxs` (realne wyniki zamiast `{"docs": []}`),
 `/primaws/rest/pub/delivery`, `/primaws/rest/pub/getPhysicalService/{id}`,
-`/primaws/rest/priv/ILSServices/holdings/{id}`, z 2-3 fikcyjnymi tytułami. Analogiczny cykl: developer
-implementuje → aktualizuje `docs/SPEC.md` o nowe REQ-y → qa weryfikuje wg tego samego wzorca co Faza 2.
+`/primaws/rest/priv/ILSServices/holdings/{id}`, z 3 fikcyjnymi tytułami (`src/omnis_mock/search_data.py`).
+`docs/SPEC.md` REQ-14..REQ-18b, pełna lista pól per endpoint i uzasadnienie: `docs/API_FIELDS.md`.
+Zaimplementowane bezpośrednio (nie przez subagentów `developer`/`qa` — patrz uwaga w `omnis-mock/CLAUDE.md`
+o working directory `bracz/` vs `omnis-mock/`), zweryfikowane `tests/test_search_contract.py` (analogiczny
+oracle do Fazy 2, prawdziwy `OmnisClient`) + ręcznie przez `demo-client`/`omnis-cli-demo --search`.
 
-Nie zaczynaj tej fazy przed PASS w Fazie 2 — Layer 1 to jedyna rzecz wymagana do recenzji Google Play.
+Kluczowe ustalenie tej fazy: `holding.holKey` jest **funkcjonalnie wymagany** przez realny
+`ILSServices/holdings` (zweryfikowane empirycznie w `omnis-mobile/docs/api-verification-response.md`) —
+mock replikuje tę zależność jako REQ-18b, jedyną pułapkę w Layer 2 analogiczną do pułapek REQ-4/7/10/11 z
+Layer 1.
 
 ## Faza 4 — `devops`: wdrożenie na Render
 
@@ -118,5 +124,5 @@ ją pokrywa.
 Faza 0 (zrobione) → Faza 0b (commit, człowiek)
   → Faza 1 (developer) → Faza 2 (qa) ──PASS──→ Faza 4 (devops) → Faza 5 (człowiek, emulator)
                                     └─FAIL─→ wraca do Fazy 1
-  (opcjonalnie, równolegle do/po Fazie 2 PASS: Faza 3 developer+qa dla Layer 2)
+  (Faza 3, Layer 2 — zrobione, poza tym linowym przepływem)
 ```

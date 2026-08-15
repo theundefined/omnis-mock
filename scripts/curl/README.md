@@ -40,5 +40,9 @@ pasują do lokalnego serwera z domyślną konfiguracją z `.env.example`.
 | `07_renew_loan.sh [loan_id]` | REQ-12, REQ-13 | prolongata — **mutuje stan** (patrz nagłówek pliku) |
 | `08_renew_unknown_loan.sh` | REQ-13b | prolongata nieznanego id → 200 no-op |
 | `09_unauthenticated_requests.sh` | REQ-5, REQ-8, REQ-12 | brak `Authorization` → 401 |
-| `10_catalog_search_stub.sh` | REQ-14 | bezpiecznik `/pnxs` |
+| `10_catalog_search_stub.sh` | REQ-14 | niepasujące zapytanie → `{"docs": []}` |
+| `11_catalog_search_match.sh` | REQ-15, REQ-16 | trafiające zapytanie + group expansion (`qInclude`) |
+| `12_catalog_search_delivery.sh` | REQ-17 | dostępność per filia, pełny `holding` z `holKey` |
+| `13_get_physical_service.sh` | REQ-18 | id usługi fizycznej; nieznany mmsid → 404 |
+| `14_ils_holdings.sh` | REQ-18b | termin zwrotu — z `holKey` vs bez (pusta odpowiedź, nie 404) |
 | `run_all.sh` | wszystkie powyższe | pełny przebieg z podsumowaniem PASS/FAIL |

@@ -1,7 +1,9 @@
-"""Punkt wejścia FastAPI. Endpointy i dokładny kształt JSON: docs/SPEC.md (REQ-1..REQ-14).
+"""Punkt wejścia FastAPI. Endpointy i dokładny kształt JSON: docs/SPEC.md (REQ-1..REQ-18b).
 
-Layer 1 zaimplementowane w Fazie 1 (docs/PLAN.md). `/healthz`, `/discovery/search` i
-`/primaws/rest/pub/pnxs` nie wymagały decyzji projektowych (bezpieczniki), reszta korzysta z `auth.py`/`data.py`.
+Layer 1 (login/counters/loans/renew) zaimplementowane w Fazie 1 (docs/PLAN.md), korzysta z
+`auth.py`/`data.py`. Layer 2 (wyszukiwarka katalogu — `pnxs`/`delivery`/`getPhysicalService`/
+`ILSServices/holdings`) zaimplementowane w Fazie 3, korzysta z `search_data.py`; pełna lista pól per
+endpoint i uzasadnienie ich włączenia/wykluczenia względem realnego Primo: docs/API_FIELDS.md.
 
 `/`, `/robots.txt` — strona statusu dla ludzi/botów, nie część kontraktu Primo (SPEC.md, sekcja
 "Endpointy pomocnicze").
@@ -13,7 +15,7 @@ import time
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
-from omnis_mock import __version__, auth, data
+from omnis_mock import __version__, auth, data, search_data
 
 app = FastAPI(title="omnis-mock", version=__version__)
 
@@ -133,9 +135,45 @@ async def discovery_search() -> Response:
 
 
 @app.get("/primaws/rest/pub/pnxs")
-async def pnxs_stub() -> dict:
-    """Bezpiecznik dla ekranu wyszukiwania w `omnis-mobile` (SPEC.md REQ-14) — Layer 2 to osobna faza."""
-    return {"docs": []}
+async def pnxs_search(request: Request) -> dict:
+    """SPEC.md REQ-14/REQ-15/REQ-16 — wyszukiwarka katalogu (Layer 2). `qInclude` -> group expansion
+    (wszystkie wydania danego `frbrgroupid`), inaczej top-level search po `q` (paginowany `offset`/`limit`).
+    Zapytanie niczego nie trafiające zwraca `{"docs": []}` — dokładnie zachowanie REQ-14 sprzed Layer 2.
+    """
+    q = request.query_params.get("q", "")
+    q_include = request.query_params.get("qInclude", "")
+    offset = int(request.query_params.get("offset") or "0")
+    limit = int(request.query_params.get("limit") or "10")
+    docs, total = search_data.search(q, q_include, offset, limit)
+    return {
+        "docs": docs,
+        "info": {
+            "totalResultsLocal": total,
+            "totalResultsPC": -1,
+            "total": total,
+            "first": offset + 1 if docs else 0,
+            "last": offset + len(docs),
+        },
+    }
+
+
+@app.post("/primaws/rest/pub/delivery")
+async def pnxs_delivery(request: Request) -> list:
+    """SPEC.md REQ-17 — dostępność per filia dla podanych alma-id. Body to goła lista stringów JSON
+    (klient wysyła `json=alma_ids` bezpośrednio, nie model), stąd `request.json()` zamiast typu Pydantic.
+    """
+    alma_ids = await request.json()
+    return search_data.delivery(alma_ids)
+
+
+@app.get("/primaws/rest/pub/getPhysicalService/{bare_mmsid}")
+async def get_physical_service(bare_mmsid: str) -> dict:
+    """SPEC.md REQ-18 — id usługi fizycznej, potrzebne do rozwiązania terminu zwrotu niedostępnego
+    egzemplarza. Nieznany mmsid -> 404 (klient łapie to jako httpx.HTTPError -> None, patrz client.py)."""
+    service_id = search_data.physical_service_id(bare_mmsid)
+    if service_id is None:
+        raise HTTPException(status_code=404, detail="Unknown record")
+    return {"physicalServiceId": service_id}
 
 
 @app.post("/primaws/suprimaLogin")
@@ -181,3 +219,19 @@ async def renew_loans(request: Request) -> dict:
     loan_id = str(body.get("id", ""))
     renewed = data.renew_demo_loan(loan_id)
     return {"success": True, "renewed": renewed}
+
+
+@app.post("/primaws/rest/priv/ILSServices/holdings/{physical_service_id}")
+async def ils_holdings(physical_service_id: str, request: Request) -> dict:
+    """SPEC.md REQ-18b (pułapka) — termin zwrotu dla niedostępnego egzemplarza. Zwraca dane TYLKO gdy
+    body zawiera niepusty `holKey` w `locations[0]` (replikuje empirycznie zweryfikowane zachowanie
+    realnego Primo) — inaczej 200 z pustą listą `items`, NIE 404, dokładnie jak prawdziwe API.
+    """
+    _require_valid_token(request)
+    body = await request.json()
+    locations = body.get("locations") or []
+    request_holding = locations[0] if locations else None
+    status_name = search_data.holding_status(physical_service_id, request_holding)
+    if status_name is None:
+        return {"data": {"itemInfo": {"locations": []}}}
+    return {"data": {"itemInfo": {"locations": [{"items": [{"itemstatusname": status_name}]}]}}}

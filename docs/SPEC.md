@@ -1,9 +1,12 @@
 # SPEC.md — kontrakt API `omnis-mock`
 
 Ten dokument jest **jedynym źródłem prawdy** o tym, co `omnis-mock` musi zwracać. Kod (`src/omnis_mock/`),
-testy (`tests/test_contract.py`) i raport QA (`docs/QA_REPORT.md`) odwołują się do numerów wymagań (`REQ-*`)
-zdefiniowanych tutaj. Jeśli implementacja i ten plik się rozjadą — SPEC.md wygrywa, chyba że ktoś świadomie
-go zaktualizuje.
+testy (`tests/test_contract.py`, `tests/test_search_contract.py`) i raport QA (`docs/QA_REPORT.md`)
+odwołują się do numerów wymagań (`REQ-*`) zdefiniowanych tutaj. Jeśli implementacja i ten plik się rozjadą
+— SPEC.md wygrywa, chyba że ktoś świadomie go zaktualizuje.
+
+Pełna lista pól JSON per endpoint wyszukiwarki katalogu (REQ-14..REQ-18b), z uzasadnieniem które pole jest
+zwracane przez realne Primo i kto (`omnis-py`/`omnis-mobile`) je faktycznie konsumuje: `docs/API_FIELDS.md`.
 
 ## Cel
 
@@ -13,10 +16,11 @@ prolongować — **bez** dostępu do jakiejkolwiek prawdziwej biblioteki. Dostę
 https://omnis-mock.onrender.com, m.in. jako konto testowe dla recenzenta Google Play (autor `omnis-mobile`
 nie jest administratorem sieci OMNIS i nie może podać prawdziwych danych logowania).
 
-## Zakres — Layer 1 (wymagane, ta faza)
+## Zakres
 
-Wszystko poniżej musi działać. Layer 2 (pełna wyszukiwarka katalogu) jest osobną, opcjonalną fazą — patrz
-`docs/PLAN.md`.
+Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b) i Layer 2 (wyszukiwarka katalogu —
+REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) są zaimplementowane i muszą działać. `get_record_details`,
+`/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz "Poza zakresem" niżej.
 
 ### Konto demo
 
@@ -131,14 +135,60 @@ Nagłówek: `Authorization: Bearer <token>`, `Content-Type: application/json`. B
   których `omnis-py` i tak nie obsługuje specjalnie (każdy status ≠ 2xx poza `login`'s `401` leci przez
   `raise_for_status()` jako wyjątek).
 
-#### 6. `GET /primaws/rest/pub/pnxs` (siatka bezpieczeństwa, nie pełny mock)
+#### 6. `GET /primaws/rest/pub/pnxs` — wyszukiwarka katalogu (Layer 2)
 
-`omnis-mobile` ma **w pełni podpięty pod UI** ekran wyszukiwania katalogu (`SearchScreen`), mimo że pełny
-mock wyszukiwarki to Layer 2 (poza zakresem tej fazy). Bez tego endpointu ekran wyszukiwania w apce pokaże
-błąd, a nie pusty wynik.
+`omnis-mobile` ma **w pełni podpięty pod UI** ekran wyszukiwania katalogu (`SearchScreen`). Od Fazy 3
+(`docs/PLAN.md`) ten endpoint zwraca realne (fikcyjne) wyniki dla zapytań trafiających w fixture
+(`src/omnis_mock/search_data.py`) — pełna lista pól i uzasadnienie ich włączenia/wykluczenia względem
+realnego Primo: `docs/API_FIELDS.md`.
 
-- **REQ-14 (bezpiecznik)**: dla dowolnego zapytania (dowolne query params, z tokenem lub bez) zwraca `200`
-  z `{"docs": []}`. To VS Layer 2, gdzie te same query params zwracałyby prawdziwe fikcyjne wyniki.
+- **REQ-14**: zapytanie **niczego nie trafiające** w fixture zwraca `200` z `{"docs": [], "info": {...}}`
+  (dokładnie zachowanie sprzed Layer 2, patrz REQ-15 niżej dla dokładnego kształtu `info`). Bez tokena
+  działa tak samo jak z tokenem.
+- **REQ-15 (dopasowanie top-level)**: `q="any,contains,<query>"` — mock wyciąga `<query>` i dopasowuje
+  **case-insensitive substring całego zapytania** względem `"{tytuł} {autor}"` danego dzieła. Świadomie
+  **NIE tokenizacja/OR** — jedno ogólne słowo w zapytaniu nie może trafić przypadkiem w żaden z fikcyjnych
+  rekordów fixture, bo zepsułoby to REQ-14 (np. `search_books("cokolwiek")` musi zostać pusty). Wynik: **co
+  najwyżej jeden `doc` na `frbrgroupid`** (real Primo grupuje wyniki tak samo), reprezentowany przez
+  najnowszą edycję danego dzieła. Odpowiedź niesie też kopertę `info` (`total`, `totalResultsLocal`,
+  `totalResultsPC`, `first`, `last`) honorującą `offset`/`limit` z query params — `omnis-mobile` czyta
+  `info.total` do paginacji "Załaduj więcej" (`omnis-py` tego pola nie czyta, ale musi być obecne).
+- **REQ-16 (group expansion)**: `qInclude="facet_frbrgroupid,exact,<id>"` zwraca **wszystkie** edycje
+  dzieła o danym `frbrgroupid`, posortowane malejąco po dacie (`sort=date_d`, jak realne Primo), bez
+  paginacji przez `offset`/`limit` (tak jak w realnym API dla tego trybu).
+
+#### 7. `POST /primaws/rest/pub/delivery` — dostępność per filia (Layer 2)
+
+Body: goła lista stringów JSON (alma-id, prefiks `alma`), **nie** model — klient wysyła `json=<lista>`
+bezpośrednio.
+
+- **REQ-17**: zwraca listę `{"pnx": {"control": {"recordid": [...]}}, "delivery": {"holding": [...]}}` po
+  jednym elemencie na **znane** przekazane alma-id (nieznane pomijane, nie błąd). Każdy `holding` niesie
+  **pełny, realistyczny zestaw pól** (nie tylko te czytane przez `omnis-py`) — patrz `docs/API_FIELDS.md`,
+  sekcja `delivery.holding[]`, dla pełnej listy i uzasadnienia. Mock **nie** waliduje, że `q`/`qInclude` w
+  query params odpowiadają grupie przekazanych id (świadome uproszczenie, uzasadnienie:
+  `docs/API_FIELDS.md`, "Świadome uproszczenia").
+
+#### 8. `GET /primaws/rest/pub/getPhysicalService/{bare_mmsid}` (Layer 2)
+
+- **REQ-18**: znany `bare_mmsid` (bez prefiksu `alma`) z niedostępną edycją w fixture → `200` z
+  `{"physicalServiceId": "PS-<bare_mmsid>"}`. Nieznany `bare_mmsid` → `404` (klient łapie to jako
+  `httpx.HTTPError` → `None`, oczekiwana ścieżka degradacji, `omnis-py/src/omnis/client.py:519-536`).
+
+#### 9. `POST /primaws/rest/priv/ILSServices/holdings/{physicalServiceId}` (Layer 2)
+
+Nagłówek: `Authorization: Bearer <token>` (ścieżka `priv`, wymaga tokena jak inne prywatne endpointy).
+
+- **REQ-18b (pułapka, analogiczna do REQ-4/REQ-7/REQ-10/REQ-11)**: odpowiedź niesie `itemstatusname`
+  (`data.itemInfo.locations[].items[].itemstatusname`, string z datą `dd/mm/rrrr`, zawierający
+  `"przekroczon"` gdy termin minął) **TYLKO gdy przychodzące body zawiera niepusty `holKey` w
+  `locations[0]`** — w przeciwnym razie `200` z **pustą listą** `data.itemInfo.locations` (**nie** `404`).
+  To replikuje empirycznie zweryfikowane zachowanie realnego Primo (`omnis-mobile/docs/api-verification-
+  response.md`, ustalone bisekcją pole-po-polu): `holKey` jest jedynym z ~16 "dekoracyjnych" pól obiektu
+  `holding`, które faktycznie wpływa na to, czy ten endpoint zwróci dane. Ponieważ `omnis-py` przekazuje
+  cały `holding` (pobrany z REQ-17) 1:1 z powrotem w tym żądaniu, poprawne zachowanie tego REQ-u zależy od
+  tego, że REQ-17 faktycznie wygenerował `holKey` — to jedyna rzecz w Layer 2, która realnie odróżnia
+  "wierny mock" od mocka, który tylko wygląda podobnie na happy path.
 
 ## Endpointy pomocnicze (poza kontraktem Primo)
 
@@ -161,10 +211,8 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
   statusu: to publiczny mock pod ogólnodostępnym URL-em, nie chcemy, żeby wyszukiwarki go zindeksowały i
   ktoś trafił tu myśląc, że to prawdziwa biblioteka.
 
-## Poza zakresem Layer 1 (Layer 2 / stretch — patrz `docs/PLAN.md`, Faza 3)
+## Poza zakresem (Layer 2 zaimplementowane, patrz REQ-14..REQ-18b wyżej; reszta poniżej wciąż nie)
 
-- Pełny mock `/primaws/rest/pub/pnxs` z realnymi wynikami + `/primaws/rest/pub/delivery` +
-  `/primaws/rest/pub/getPhysicalService/{id}` + `/primaws/rest/priv/ILSServices/holdings/{id}`.
 - `GET /primaws/rest/pub/pnxs/L/alma{mmsid}` (`get_record_details` w `omnis-py`) — osobny endpoint od
   wyszukiwarki, zwraca pełne metadane pojedynczej książki (okładka, ISBN, wydawca). Bez niego `omnis-cli
   --format json`/`--format csv` (które w odróżnieniu od domyślnego widoku tabelarycznego pobierają te
@@ -196,6 +244,18 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
 - Stan po `renew_loan` — w pamięci procesu (moduł-level, jedno konto = brak potrzeby na sesyjność per-user).
   Restart procesu resetuje wszystko do stanu początkowego. To jest zamierzone, nie luka.
 
+### Dane katalogu (fixture wyszukiwarki, `src/omnis_mock/search_data.py`)
+
+- 3 fikcyjne dzieła, jawnie zmyślone tytuły/autorzy (publiczny mock — nie przypisujemy fałszywej
+  dostępności możliwej do zidentyfikowania osobie): „Cienie Nibylandii" (2 wydania — ćwiczy REQ-16 group
+  expansion), „Ostatni Rejs Wyobraźni" (1 wydanie, w całości dostępne), „Biblioteka Za Mgłą" (1 wydanie,
+  niedostępne).
+- Zróżnicowane stany dostępności, jak w "Dane demo" dla wypożyczeń: co najmniej jedna niedostępna wersja z
+  terminem **przeszłym** (przeterminowanym, `overdue=True`) i co najmniej jedna z terminem **przyszłym**
+  (`overdue=False`) — obie gałęzie reguły "przekroczon" z REQ-18b muszą być pokryte.
+- Katalog jest **bezstanowy** (bez odpowiednika `_renewal_extensions`) — daty w `itemstatusname` liczone
+  względem `date.today()` przy każdym żądaniu, tak samo jak wypożyczenia w "Dane demo" wyżej.
+
 ## Bezpieczeństwo / ograniczenia (obowiązują niezależnie od fazy)
 
 - Zero prawdziwych danych osobowych.
@@ -225,3 +285,9 @@ autora mocka o tym, co klient akceptuje.
 
 **Ten test NIE dowodzi, że Kotlinowy klient (`omnis-mobile`) też sparsuje odpowiedź poprawnie** — Kotlin ma
 inne (non-null) typy i inną serializację. Weryfikacja Kotlina jest ręczna — patrz `docs/PLAN.md`, Faza 5.
+
+Dla Layer 2 (REQ-14..REQ-18b) analogicznym oracle jest `tests/test_search_contract.py`: `client.search_books(...)`
+przez prawdziwego `OmnisClient`, z asercjami na polach liściach (`edition`, `branches[].status`,
+`branches[].due_date`, `branches[].overdue`), nie tylko na długości listy wyników — samo `len(results) > 0`
+nic nie dowodzi, bo `omnis-py` łyka błędy HTTP z `getPhysicalService`/`ILSServices` po cichu (patrz
+`docs/API_FIELDS.md`, uzasadnienie REQ-18b).

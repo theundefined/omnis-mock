@@ -98,12 +98,72 @@ code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/primaws/rest/p
 check_status "POST /renew_loans nieznanym id -> 200 no-op" 200 "$code"
 
 echo "-- REQ-14 --"
-body=$(curl -sS "$BASE_URL/primaws/rest/pub/pnxs?q=cokolwiek")
-if [ "$body" = '{"docs":[]}' ]; then
-    printf "  PASS  %-55s\n" "GET /pnxs zwraca pustą listę"
+docs_len=$(curl -sS "$BASE_URL/primaws/rest/pub/pnxs?q=any,contains,cokolwiek" |
+    python3 -c "import json,sys; print(len(json.load(sys.stdin)['docs']))")
+if [ "$docs_len" = "0" ]; then
+    printf "  PASS  %-55s\n" "GET /pnxs (niepasujące zapytanie) zwraca pustą listę"
     PASS=$((PASS + 1))
 else
-    printf "  FAIL  %-55s (otrzymano: %s)\n" "GET /pnxs" "$body"
+    printf "  FAIL  %-55s (docs_len=%s)\n" "GET /pnxs" "$docs_len"
+    FAIL=$((FAIL + 1))
+fi
+
+echo "-- REQ-15 / REQ-16 --"
+SEARCH_JSON=$(curl -sS -G "$BASE_URL/primaws/rest/pub/pnxs" --data-urlencode "q=any,contains,Nibylandii")
+docs_len=$(echo "$SEARCH_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['docs']))")
+if [ "$docs_len" = "1" ]; then
+    printf "  PASS  %-55s\n" "GET /pnxs (trafiające zapytanie) zwraca 1 doc"
+    PASS=$((PASS + 1))
+else
+    printf "  FAIL  %-55s (docs_len=%s)\n" "GET /pnxs trafiające" "$docs_len"
+    FAIL=$((FAIL + 1))
+fi
+
+GROUP_JSON=$(curl -sS -G "$BASE_URL/primaws/rest/pub/pnxs" \
+    --data-urlencode "q=any,contains,Nibylandii" \
+    --data-urlencode "qInclude=facet_frbrgroupid,exact,MOCK-GROUP-A")
+group_len=$(echo "$GROUP_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['docs']))")
+if [ "$group_len" = "2" ]; then
+    printf "  PASS  %-55s\n" "GET /pnxs (qInclude) zwraca obie edycje"
+    PASS=$((PASS + 1))
+else
+    printf "  FAIL  %-55s (group_len=%s)\n" "GET /pnxs qInclude" "$group_len"
+    FAIL=$((FAIL + 1))
+fi
+
+echo "-- REQ-17 --"
+DELIVERY_JSON=$(curl -sS -X POST "$BASE_URL/primaws/rest/pub/delivery" \
+    -H "Content-Type: application/json" -d '["almaMOCK-SEARCH-A1","almaMOCK-SEARCH-A2"]')
+holkey_present=$(echo "$DELIVERY_JSON" |
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(all('holKey' in item['delivery']['holding'][0] and item['delivery']['holding'][0]['holKey'] for item in d))")
+if [ "$holkey_present" = "True" ]; then
+    printf "  PASS  %-55s\n" "POST /delivery zwraca holKey dla każdego holdingu"
+    PASS=$((PASS + 1))
+else
+    printf "  FAIL  %-55s\n" "POST /delivery — brak holKey"
+    FAIL=$((FAIL + 1))
+fi
+
+echo "-- REQ-18 --"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/pub/getPhysicalService/nieznany-mmsid")
+check_status "GET /getPhysicalService nieznanym mmsid -> 404" 404 "$code"
+
+echo "-- REQ-18b --"
+code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+    "$BASE_URL/primaws/rest/priv/ILSServices/holdings/PS-MOCK-SEARCH-A2" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"locations":[{"mainLocation":"Filia Demo 2"}]}')
+check_status "POST /ILSServices/holdings bez holKey -> 200 (nie 404)" 200 "$code"
+
+body=$(curl -sS -X POST \
+    "$BASE_URL/primaws/rest/priv/ILSServices/holdings/PS-MOCK-SEARCH-A2" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"locations":[{"mainLocation":"Filia Demo 2"}]}')
+if [ "$body" = '{"data":{"itemInfo":{"locations":[]}}}' ]; then
+    printf "  PASS  %-55s\n" "POST /ILSServices/holdings bez holKey -> pusta locations"
+    PASS=$((PASS + 1))
+else
+    printf "  FAIL  %-55s (otrzymano: %s)\n" "POST /ILSServices/holdings bez holKey" "$body"
     FAIL=$((FAIL + 1))
 fi
 
