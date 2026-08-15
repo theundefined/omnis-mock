@@ -140,6 +140,21 @@ błąd, a nie pusty wynik.
 - **REQ-14 (bezpiecznik)**: dla dowolnego zapytania (dowolne query params, z tokenem lub bez) zwraca `200`
   z `{"docs": []}`. To VS Layer 2, gdzie te same query params zwracałyby prawdziwe fikcyjne wyniki.
 
+## Endpointy pomocnicze (poza kontraktem Primo)
+
+Nie są częścią API, którego oczekuje `OmnisClient`/`omnis-mobile` — nie testuje ich `tests/test_contract.py`
+i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafiającego pod ten URL bezpośrednio
+(np. recenzent Google Play sprawdzający, czy serwis żyje) albo dla botów/wyszukiwarek.
+
+- **`GET /`** — strona statusu (HTML): wersja (`__version__`), commit (z `RENDER_GIT_COMMIT`, jeśli
+  wdrożone na Render — lokalnie po prostu "dev"), uptime procesu, link do repo na GitHubie, link do
+  `docs/SPEC.md`, i dane konta demo (login/hasło) — pokazane wprost, bo to jawnie nie-sekret (patrz
+  "Dane demo" wyżej), a to ułatwia komuś wypróbowanie apki bez szukania w dokumentacji. Musi zawierać
+  wyraźne zastrzeżenie "to nie jest prawdziwa biblioteka/OMNIS".
+- **`GET /robots.txt`** — `Disallow: /` dla wszystkich botów. Razem z meta-tagiem `noindex` na stronie
+  statusu: to publiczny mock pod ogólnodostępnym URL-em, nie chcemy, żeby wyszukiwarki go zindeksowały i
+  ktoś trafił tu myśląc, że to prawdziwa biblioteka.
+
 ## Poza zakresem Layer 1 (Layer 2 / stretch — patrz `docs/PLAN.md`, Faza 3)
 
 - Pełny mock `/primaws/rest/pub/pnxs` z realnymi wynikami + `/primaws/rest/pub/delivery` +
