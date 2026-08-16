@@ -2,16 +2,23 @@
 i uzasadnienie włączenia/wykluczenia: docs/API_FIELDS.md.
 
 3 fikcyjne dzieła (tytuły/autorzy jawnie zmyśleni — publiczny mock, nie przypisujemy fałszywej
-dostępności możliwej do zidentyfikowania osobie). Kształt `pnx`/`holding` odzwierciedla REALNE odpowiedzi
+dostępności możliwej do zidentyfikowania osobie) + 4 dzieła wygenerowane z `data._LOAN_TEMPLATES`
+(zobacz `_works_from_loans()` niżej) — bez tych ostatnich wyszukiwarka i konto demo pokazywałyby dwa
+rozłączne zbiory książek: tytuł wypożyczony na koncie demo nigdy nie dałoby się znaleźć w katalogu, co
+wygląda jak błąd przy ręcznym testowaniu. Kształt `pnx`/`holding` odzwierciedla REALNE odpowiedzi
 Primo (zweryfikowane względem `omnis-py/debug_search_output/*.json` i
 `omnis-mobile/docs/api-verification-response.md`), nie tylko minimalny zestaw pól czytany przez jednego
 klienta — patrz docs/API_FIELDS.md dla pełnej tabeli pole-po-polu.
 
-Bez stanu mutowalnego — w przeciwieństwie do `data.py` (wypożyczenia), katalog się nie zmienia w runtime.
+Bez stanu mutowalnego — w przeciwieństwie do `data.py` (wypożyczenia), katalog się nie zmienia w runtime;
+`_works_from_loans()` czyta tylko statyczny `data._LOAN_TEMPLATES`, nigdy `data.get_demo_loans()` ani
+`data.renew_demo_loan()`, więc prolongata wypożyczenia nie zmienia terminu widocznego w wyszukiwarce.
 """
 
 from datetime import date, timedelta
 from typing import Any, Optional
+
+from omnis_mock import data
 
 # Institution/organization code używany w fixture — zgodny z demo institution z docs/SPEC.md ("MOCK").
 _INSTITUTION = "MOCK"
@@ -96,6 +103,59 @@ _EDITIONS_C: list[dict[str, Any]] = [
     },
 ]
 
+
+def _library_code_from_location(main_location: str) -> str:
+    """ "Filia Demo 1" -> "FD1" — sam styl kodów co w `_EDITIONS_A/B/C` wyżej."""
+    number = main_location.rsplit(" ", 1)[-1]
+    return f"FD{number}"
+
+
+def _works_from_loans() -> list[dict[str, Any]]:
+    """Generuje wpisy katalogu wprost z `data._LOAN_TEMPLATES` (statyczny szablon, NIE
+    `data.get_demo_loans()`/`data.renew_demo_loan()` — patrz docstring modułu), po jednym dziele/edycji na
+    wypożyczenie, z tym samym `mmsid` co odpowiadający loan. Każde jest oznaczone jako `unavailable` z
+    `due_offset_days` identycznym jak termin zwrotu tego wypożyczenia — inaczej książka widoczna jako
+    wypożyczona na koncie demo byłaby niewyszukiwalna w katalogu (dokładnie zgłoszona niespójność).
+    """
+    works = []
+    for tmpl in data._LOAN_TEMPLATES:
+        library_code = _library_code_from_location(tmpl["mainlocationname"])
+        works.append(
+            {
+                "frbrgroupid": f"MOCK-GROUP-{tmpl['loanid'].upper()}",
+                "title": tmpl["title"],
+                "author": tmpl["author"],
+                "genres": ["Literatura polska", "Klasyka"],
+                "subjects": ["Historia", "Obyczaje"],
+                "series": None,
+                "language": "pol",
+                "publisher": "Wydawnictwo Demo",
+                "place": "Warszawa",
+                "editions": [
+                    {
+                        "mmsid": tmpl["mmsid"],
+                        "edition_label": "Wydanie biblioteczne",
+                        "date": "2000",
+                        "isbn": f"9788300{tmpl['loanid'][-3:]}0000",
+                        "format_display": "320 stron ; 21 cm.",
+                        "holding": {
+                            "main_location": tmpl["mainlocationname"],
+                            "library_code": library_code,
+                            "sub_location": f"ul. Wypożyczeń {library_code[-1]}",
+                            "sub_location_code": f"{library_code}dz",
+                            "availability_status": "unavailable",
+                            "hold_id": f"MOCK-HOLD-{tmpl['loanid'].upper()}",
+                            "stack_map_url": f"https://maps.app.goo.gl/mock{tmpl['loanid'].upper()}",
+                        },
+                        # Ten sam termin co `due_offset_days` w `_LOAN_TEMPLATES` — patrz docstring funkcji.
+                        "due_offset_days": tmpl["due_offset_days"],
+                    }
+                ],
+            }
+        )
+    return works
+
+
 _WORKS: list[dict[str, Any]] = [
     {
         "frbrgroupid": "MOCK-GROUP-A",
@@ -133,6 +193,7 @@ _WORKS: list[dict[str, Any]] = [
         "place": "Poznań",
         "editions": _EDITIONS_C,
     },
+    *_works_from_loans(),
 ]
 
 _MMSID_TO_WORK_EDITION: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {

@@ -129,6 +129,30 @@ async def test_search_unmatched_query_returns_empty(client: OmnisClient) -> None
     assert results == []
 
 
+async def test_search_finds_currently_loaned_book_as_unavailable(client: OmnisClient) -> None:
+    """Regresja dla niespójności zgłoszonej przez użytkownika: tytuł aktualnie wypożyczony na koncie demo
+    musi być znajdywalny w wyszukiwarce (jako `unavailable`), z terminem zwrotu IDENTYCZNYM jak na koncie
+    demo — nie tylko "nie istnieć" w katalogu tylko dlatego, że jest wypożyczony (SPEC.md, "Dane katalogu",
+    `_works_from_loans()` w `search_data.py`).
+    """
+    await _login(client)
+    loans = await client.get_loans()
+    pan_tadeusz_loan = next(loan for loan in loans if loan.mmsid == "mock-mms-001")
+
+    results = await client.search_books("Pan Tadeusz")
+
+    assert len(results) == 1
+    assert results[0].title == "Pan Tadeusz"
+    version = results[0].versions[0]
+    assert version.mmsid == pan_tadeusz_loan.mmsid
+    branch = version.branches[0]
+    assert branch.status == "unavailable"
+
+    due = pan_tadeusz_loan.due_date  # "YYYYMMDD"
+    expected_due = date(int(due[:4]), int(due[4:6]), int(due[6:8])).strftime("%d/%m/%Y")
+    assert branch.due_date == expected_due
+
+
 async def test_ils_holdings_without_holkey_returns_empty_not_404(client: OmnisClient) -> None:
     """SPEC.md REQ-18b, sprawdzone bezpośrednio (bez przechodzenia przez cały search_books): body bez
     `holKey` w `locations[0]` -> 200 z pustą listą `items`, replikując empirycznie zweryfikowane

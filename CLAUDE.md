@@ -70,7 +70,9 @@ src/omnis_mock/
   main.py         FastAPI — routing; dokładny kształt JSON per endpoint w docs/SPEC.md (REQ-1..REQ-18b)
   auth.py         fake JWT (3 segmenty, payload ASCII-only — REQ-4) + rejestr ważnych tokenów (in-memory)
   data.py         fixture wypożyczeń demo-konta + stan po renew_loan (in-memory, resetowany co proces)
-  search_data.py  fixture katalogu (3 fikcyjne dzieła) dla wyszukiwarki — bezstanowy, bez odpowiednika renew_loan
+  search_data.py  fixture katalogu (3 fikcyjne dzieła + 4 wygenerowane z data._LOAN_TEMPLATES, ten sam
+                  mmsid co odpowiedni loan, oznaczone jako unavailable) dla wyszukiwarki — bezstanowy,
+                  bez odpowiednika renew_loan
 ```
 
 Celowo brak bazy danych — to jednorazowy, bezstanowy między restartami mock, nie produkcyjny system.

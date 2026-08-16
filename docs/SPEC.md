@@ -250,11 +250,18 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
   dostępności możliwej do zidentyfikowania osobie): „Cienie Nibylandii" (2 wydania — ćwiczy REQ-16 group
   expansion), „Ostatni Rejs Wyobraźni" (1 wydanie, w całości dostępne), „Biblioteka Za Mgłą" (1 wydanie,
   niedostępne).
+- **Plus 4 dzieła wygenerowane z `data._LOAN_TEMPLATES`** (`_works_from_loans()` w `search_data.py`) — te
+  same tytuły/`mmsid` co 4 wypożyczenia demo-konta z "Dane demo" wyżej, każde oznaczone
+  `availability_status: "unavailable"` z `due_offset_days` **identycznym** jak termin zwrotu danego
+  wypożyczenia. Bez tego wyszukiwarka i konto demo pokazywałyby dwa rozłączne zbiory książek — tytuł
+  wypożyczony na koncie demo byłby niewyszukiwalny w katalogu.
 - Zróżnicowane stany dostępności, jak w "Dane demo" dla wypożyczeń: co najmniej jedna niedostępna wersja z
   terminem **przeszłym** (przeterminowanym, `overdue=True`) i co najmniej jedna z terminem **przyszłym**
   (`overdue=False`) — obie gałęzie reguły "przekroczon" z REQ-18b muszą być pokryte.
 - Katalog jest **bezstanowy** (bez odpowiednika `_renewal_extensions`) — daty w `itemstatusname` liczone
   względem `date.today()` przy każdym żądaniu, tak samo jak wypożyczenia w "Dane demo" wyżej.
+  `_works_from_loans()` czyta wyłącznie statyczny `data._LOAN_TEMPLATES`, nigdy `data.get_demo_loans()` ani
+  `data.renew_demo_loan()`, więc prolongata wypożyczenia nie zmienia terminu widocznego w wyszukiwarce.
 
 ## Bezpieczeństwo / ograniczenia (obowiązują niezależnie od fazy)
 
