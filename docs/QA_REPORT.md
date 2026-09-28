@@ -466,3 +466,135 @@ i wymagany) — wszystkie potwierdzone ponownie w tej sesji, nie tylko odziedzic
 > może też zostać wpisany ręcznie. Dzieła z wypożyczeń mają adres filii z `_BRANCH_ADDRESS`, taki sam jak
 > w `_EDITIONS_A/B/C` („Filia Demo 1” → „ul. Testowa 1” itd.), więc tabela wyżej pokazuje stan sprzed
 > poprawki. `pytest` po poprawce: 39/39.
+
+## REQ-L1..REQ-L5 — pełny kształt wypożyczeń + osobna historia — QA (2026-09-28)
+
+**Zakres:** weryfikacja niezacommitowanych zmian w working tree (`git diff` + nowe pliki
+`tests/test_loan_details.py`, `scripts/curl/20_loan_history.sh`) wobec zlecenia
+`omnis-mobile/docs/omnis-mock-loan-details-spec.md` i przeniesionego do `docs/SPEC.md` kontraktu
+(REQ-L1..REQ-L5), decyzje developera w `docs/DEV_NOTES.md` (ostatnia sekcja). QA wykonane bez `Write`/`Edit`
+— wyłącznie `Read`/`Bash` (`pytest`, `black`, `ruff`, `curl`, dwa niezależne lokalne serwery `uvicorn`,
+czytanie kodu klientów w `omnis-py`, `omnis-mobile`, `omnis-ha`).
+
+### Automatyczne testy
+
+- `.venv/bin/pip install -e ".[dev]"` — OK.
+- `.venv/bin/pytest -v` → **48/48 PASS** (39 istniejących + 9 nowych w `tests/test_loan_details.py`,
+  w tym `test_omnis_py_parses_active_and_history` — prawdziwy `OmnisClient.get_loans("history")`, zgodny z
+  sygnaturą `get_loans(self, loan_type: str = "active")` w zainstalowanym `omnis-py`).
+- `.venv/bin/black --check src tests` → czyste (11 plików, w tym nowy `test_loan_details.py`).
+- `ruff check src tests` → czyste.
+- `bash -n scripts/curl/run_all.sh scripts/curl/20_loan_history.sh` → składnia OK.
+
+### REQ-13/REQ-L5 na długo żyjącej instancji (wymóg #3 zlecenia QA)
+
+Dwa niezależne, świeże lokalne serwery (`.venv/bin/uvicorn omnis_mock.main:app --port <wolny>`, start
+w tle, `curl /healthz` w pętli do pierwszej odpowiedzi, zatrzymane po PID — nie `pkill -f`):
+
+- Instancja #1 (port 8017): `run_all.sh` odpalony **4 razy pod rząd** → `35 PASS, 0 FAIL` przy każdym
+  uruchomieniu.
+- Instancja #2 (port 8018, świeży restart, żeby zobaczyć całą progresję od zera): `run_all.sh` **3 razy
+  pod rząd** → `35 PASS, 0 FAIL` każdy raz, a linia REQ-13/REQ-L5 przeszła dokładnie przez trzy gałęzie
+  opisane w `DEV_NOTES.md`:
+  - run 1: `renew_loan realnie przesuwa duedate (20261003 -> 20261017, Prolongowano)`
+  - run 2: `renew_loan realnie przesuwa duedate (20261017 -> 20261031, Prolongowano)`
+  - run 3: `renew_loan na limicie maxrenewdate -> bez zmian (20261031, limit 20261031)`
+
+  Zgodne z deklaracją developera („loan-001 mieści dokładnie dwie prolongaty”, „trzeci przebieg przeszedł
+  gałęzią na limicie”) — potwierdzone niezależnie, nie tylko odczytane z `DEV_NOTES.md`.
+
+### Ręczna weryfikacja przypadków brzegowych (curl, poza pytest)
+
+| Sprawdzenie | Wynik |
+|---|---|
+| Złe hasło (`POST /suprimaLogin`) | `401` |
+| Brak `Authorization` na `/counters`, `/loans` (GET) | `401` na obu |
+| Nieznany `loan_id` w `POST /renew_loans` | `200`, `{"success": true, "renewed": false}` (no-op, zgodnie z REQ-13b) |
+| `GET /loans` bez `type` / z `type=bogus` | oba zwracają aktywne (4 pozycje `loan-001..004`) — zgodne z SPEC „każda inna wartość albo jej brak zwraca aktywne” |
+| Powtórzone `GET /discovery/search` (3×) | `200` każdorazowo, idempotentne |
+| Token gościa (`guestJwt?viewId=...`) na `myaccount/loans?type=history` | `200` z `{"status":"failed","reply-code":"0002",...}` — REQ-G3 rozciąga się poprawnie także na `type=history`, nie tylko `type=active` |
+| Pełny dump `GET /loans?type=active` i `?type=history` | zgodne z REQ-L1..L4 co do klucza po kluczu (patrz niżej) |
+
+### REQ-L1..REQ-L5 — REQ po REQ
+
+| REQ | Sprawdzenie | Werdykt |
+|---|---|---|
+| REQ-L1 | Każdy aktywny `loan` ma wszystkie 13 dodatkowych kluczy (`callnumber2`, `year`, `itemcategorycode`, `itemcategoryname`, `itemstatusname`, `itemid`, `maxrenewdate`, `renewstatuses`, `alerts`, `mainlocationcode`, `secondarylocationcode`, `ilsinstitutioncode`, `nzmmsid`, `nzilsinstitutioncode`); koperta `data.loans` ma `historicloans: "Y"` i `hasAlerts: false` (boolean, nie string) dla **obu** `type`. Zweryfikowane pełnym dumpem JSON i przez `pytest`. | **PASS** |
+| REQ-L1 (spójność z katalogiem) | Dla każdego aktywnego loanu: `mainlocationcode` == `holding.libraryCode`, `secondarylocationname` (gdy nie `null`) == `holding.subLocation`, `year` (bez kropki) == `pnx.display.creationdate[0]` rekordu `pnxs/L/alma{mmsid}`. Sprawdzone ręcznie dla `loan-001`/`loan-002` i przez `pytest` dla wszystkich 4. To samo powtórzone dla historii (4/4 `hist-*`, m.in. `MOCK-SEARCH-A1` → `creationdate=2022`/`libraryCode=FD1`/`subLocation=ul. Testowa 1`, zgodne z `year=2022.`/`mainlocationcode=FD1`/`secondarylocationname=ul. Testowa 1`). | **PASS** |
+| REQ-L2 | `renewstatuses` w kształcie `{"renewstatus": [...]}` dla odnawialnych (pusta lista, `loan-001`/`loan-002`) i dla nieodnawialnych z DWOMA różnymi powodami: `loan-003` — lista jednoelementowa z tekstem widzianym na żywo; `loan-004` — **goły string** `"Osiągnięto limit prolongat"` zamiast listy (test odporności klienta). Historia poprawnie **nie ma** klucza `renewstatuses` wcale (nie `null`, nieobecny — sprawdzone bezpośrednio w dumpie JSON). | **PASS** |
+| REQ-L3 | `loanstatus` ∈ {"Zwykłe","Prolongowano"} (nigdy "Active"); `duehour` = `"2359"` (bez dwukropka) na WSZYSTKICH loanach, aktywnych i historii; `secondarylocationname` = adres filii (`"ul. …"`) w większości, `null` w `loan-003`; `title` z „ / ” w większości (`loan-001/002/003`), bez „ / ” w `loan-004` ("Dziady"). | **PASS** |
+| REQ-L4 | `type=history` zwraca 4 pozycje (`hist-001..004`), rozłączne z aktywnymi; `returndate`/`returnhour` obecne, `renewstatuses`/`maxrenewdate`/`alerts` NIEOBECNE; `renew` zawsze `"N"`; `loanstatus` mieszany (`Zwykłe`+`Prolongowano`); `hist-003` ma `itemcategoryname: "Ubytkowany"`, `itemstatusname: "W procesie"`, `secondarylocationname: "Księga ubytków FD1"`; `mmsid` wszystkich 4 pozycji istnieje w katalogu (`pnxs/L/alma{mmsid}` zwraca `pnx`); `showmore` bez `"Y"` (REQ-11 rozciągnięty na historię); `myaccount/counters` liczy tylko aktywne (`Loans` = 4, nie 8). | **PASS** |
+| REQ-L5 | Prolongata `loan-001` (`renew:"Y"`) nigdy nie przesuwa `duedate` poza `maxrenewdate` — potwierdzone empirycznie dwoma niezależnymi przebiegami `run_all.sh` (patrz wyżej) i `pytest` (`test_renewal_sets_status_and_respects_maxrenewdate` — 5 kolejnych wywołań `renew_loans` po dojściu do limitu, zawsze `200` no-op, `duedate` bez zmian). Nieodnawialne (`renew:"N"`) są no-opem NIEZALEŻNIE od `maxrenewdate` (sprawdzone kodem: `renew_demo_loan` zwraca `False` już na etapie `tmpl["renew"] != "Y"`, przed sprawdzeniem limitu) — zgodne z `test_non_renewable_loan_does_not_change` i z ręcznym `curl` na `loan-003`. | **PASS** |
+
+### Kompatybilność wsteczna i wielojęzyczna (poza zakresem samego `pytest`)
+
+- **`omnis-py`** (`Loan` pydantic, `client.py`): deklaruje tylko pola z REQ-10 — nowe klucze REQ-L1..L4
+  są nadmiarowe i pydantic je ignoruje (potwierdzone przez `test_omnis_py_parses_active_and_history`
+  będące realnym `OmnisClient` z PyPI). `due_hour` jest przechowywane i wypisywane w `cli.py` jako
+  surowy string (`loan.due_hour`), NIGDZIE nie parsowane jako czas (`grep due_hour` w całym `omnis-py` →
+  tylko deklaracja pola + dwa miejsca w tabeli CLI) — zmiana formatu `"23:59"` → `"2359"` **nie** psuje
+  `omnis-cli`. `loan.status` również tylko wypisywane, nie porównywane literałowo do `"Active"`.
+- **`omnis-ha`**: `grep due_hour/duehour` w `custom_components/omnis` → brak wyników. Sensor/kalendarz
+  budują datę tylko z `due_date`, nie z godziny — zmiana formatu godziny jest dla tego projektu
+  nieistotna.
+- **`omnis-mobile` (Kotlin)**: `Models.kt`/`LoanResponseItem` deklaruje `callnumber2`, `year`,
+  `itemcategoryname`, `maxrenewdate`, `renewstatuses` (surowy `JsonElement?`), `returndate`, `returnhour`
+  jako **nullable** — Gson zostawia `null` przy braku klucza (historia: brak `maxrenewdate`/`renewstatuses`
+  → `null`; aktywne: brak `returndate`/`returnhour` → `null`), zero `NullPointerException`/wyjątku
+  deserializacji. `renewStatusMessages()` (Models.kt) obsługuje explicité oba kształty `renewstatuses`
+  (obiekt z listą ORAZ obiekt z gołym stringiem) — dokładnie to, co generuje `loan-003`/`loan-004`.
+  `isRegularLoanStatus()` (Models.kt L202-205) już traktuje `"zwykłe"` (case-insensitive) jako status
+  regularny równolegle z `"active"`/`"normal"`/`"aktywne"` — apka była już przygotowana na zmianę
+  `"Active"` → `"Zwykłe"` PRZED tą sesją mocka, więc karta wypożyczenia nie zacznie fałszywie pokazywać
+  badge'a statusu. `displayTitle()` (Models.kt L191-198) to dokładnie ta funkcja, którą
+  `tests/test_loan_details.py::_display_title` kopiuje — potwierdzone czytaniem źródła, nie tylko
+  deklaracją w komentarzu testu.
+- **Historia — paginacja w Kotlinie (`OmnisRepository.getLoanHistoryPage`, `OmnisViewModel` L728-820)**:
+  `hasMore` liczone WYŁĄCZNIE z `"Y" in showmore` (nigdy z `size == bulk` ani domyślnie `true` po
+  pierwszej stronie) i `HistoryCursor(nextOffset, hasMore)` gate'uje kolejne wywołania
+  (`if (!cursor.hasMore) return@forEach`). Mock zwraca `showmore: []` dla historii przy każdym
+  wywołaniu, więc `hasMore=false` po pierwszej stronie — aplikacja **nie** poprosi o drugą stronę i nie
+  zduplikuje 4 pozycji historii na ekranie. Brak błędu.
+- **`loan-004` (zmiana `renew: "Y"` → `"N"`)**: `grep -rn "loan-004"` w całym workspace poza
+  `omnis-mock/` → brak wyników — żaden inny projekt nie hardkoduje tego identyfikatora ani nie zakłada
+  jego wcześniejszej odnawialności. Zmiana jest bezpieczna.
+
+### Dane osobowe / prawdziwe identyfikatory (wymóg #6)
+
+Rozszerzony grep na `git diff` + oba nowe, nieśledzone pliki (`tests/test_loan_details.py`,
+`scripts/curl/20_loan_history.sh`) — wzorce: adres filii ze zlecenia (`Osinowa`), kody lokalizacji/
+instytucji z realnej odpowiedzi (`F08`, `FIL08`, `48OMNIS*`, `BRACZ`, `BRP`), długie numery (Alma
+mmsid/itemid, ≥15 cyfr) oraz literalne przykładowe ID ze zlecenia (`23123456780009337`,
+`99123456780009336`, `48OMNIS_NETWORK`) — **żadnego trafienia**. Wszystkie identyfikatory w mocku są
+własnym schematem (`MOCK-ITEM-…`, `MOCK-NZ-…`, `MOCK`, `MOCK_NETWORK`, `FD1`/`FD1dz`), zgodnie z deklaracją
+w `DEV_NOTES.md` („Identyfikatory celowo mockowe, bez kopiowania przykładowych numerów ze zlecenia”).
+`itemcategorycode: "WZ_30"` i etykieta „Wypożyczane na 30 dni” są skopiowane ze zlecenia dosłownie, ale to
+kod kategorii egzemplarza (metadane biblioteczne, nie dane osobowe/identyfikujące) — bez zastrzeżeń.
+
+### Dokumentacja (wymóg #7)
+
+- `docs/SPEC.md` (endpoint 4/5, „Dane demo”), `CLAUDE.md`, `docs/DEV_NOTES.md`,
+  `scripts/curl/README.md` — zgodne z kodem punkt po punkcie (sprawdzone wyżej), bez sprzecznych
+  przykładów (REQ-10 w SPEC.md nie zawiera już nieaktualnego przykładu `"23:59"`/`"Active"` — jest
+  odniesieniem ogólnym, nie konkretną wartością).
+- **Znalezisko (informacyjne, niebronujące)**: sekcja „Kryterium akceptacji — PRIMARY oracle” w
+  `docs/SPEC.md` opisuje osobno oracle dla Layer 1, Layer 2 i REQ-G1..REQ-G6, ale nie wspomina
+  `tests/test_loan_details.py` jako oracle dla REQ-L1..REQ-L5 (mimo że ten plik realnie jest tym oracle —
+  zawiera `test_omnis_py_parses_active_and_history` z prawdziwym `OmnisClient`). Nie wpływa na
+  poprawność implementacji, tylko na kompletność tej jednej sekcji dokumentu — do uzupełnienia przy
+  najbliższej okazji.
+
+### Werdykt końcowy (REQ-L1..REQ-L5)
+
+- [x] **PASS** — REQ-L1..REQ-L5 zaimplementowane zgodnie ze zleceniem
+      `omnis-mobile/docs/omnis-mock-loan-details-spec.md` i `docs/SPEC.md`, zweryfikowane niezależnie:
+      `pytest` 48/48, `black`/`ruff` czyste, `run_all.sh` 0 FAIL na dwóch niezależnych, świeżo
+      wystartowanych lokalnych instancjach (4× i 3× pod rząd, w tym pełna progresja normalna →
+      no-op-na-limicie zgodna z deklaracją developera), ręczne `curl` na przypadkach brzegowych spoza
+      `pytest` (złe hasło, brak `Authorization`, nieznany `loan_id`, `type=bogus`, token gościa na
+      `type=history`), spójność wypożyczeń z katalogiem (kody lokalizacji, adresy, rok) dla WSZYSTKICH
+      4 aktywnych i 4 historycznych pozycji (nie tylko przykładu z testów dewelopera), oraz czytanie
+      faktycznego kodu klientów (`omnis-py`, `omnis-ha`, `omnis-mobile`/Kotlin) — brak regresji, brak
+      danych osobowych/prawdziwych identyfikatorów w diffie. Jedyne znalezisko to niebronująca,
+      informacyjna niekompletność jednego akapitu dokumentacji (patrz wyżej). Gotowe do Fazy 4 (deploy).
+- [ ] **FAIL** — lista blokujących REQ do zwrotu developerowi: _(brak)_

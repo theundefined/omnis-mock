@@ -50,4 +50,5 @@ pasują do lokalnego serwera z domyślną konfiguracją z `.env.example`.
 | `17_creator_search.sh` | REQ-G5 | `q=creator,contains,<au>` (z przecinkiem) vs słowo z tytułu |
 | `18_guest_myaccount_denied.sh` | REQ-G3 | token gościa na `myaccount/*` → 200 z `"status":"failed"` (nie 401) |
 | `19_series_search.sh` | REQ-G6 | rekord `pnxs/L/alma{mmsid}` (seria + autor), `q=series,contains,<nazwa>`, nieznany rekord → 200 |
+| `20_loan_history.sh` | REQ-L1..REQ-L4 | pełny kształt wypożyczeń (okno „Szczegóły”) i osobna historia `type=history` |
 | `run_all.sh` | wszystkie powyższe | pełny przebieg z podsumowaniem PASS/FAIL |

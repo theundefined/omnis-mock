@@ -9,8 +9,9 @@
 #   BASE_URL=https://omnis-mock.onrender.com ./run_all.sh  # przeciwko żywemu deployowi
 #
 # UWAGA: test REQ-13 (prolongata) MUTUJE stan demo-konta (loan-001 dostaje +14 dni do terminu) —
-# nieszkodliwe, ale powtarzane uruchomienia przeciwko tej samej, długo żyjącej instancji będą
-# przesuwać ten termin coraz dalej w przyszłość.
+# nieszkodliwe. Po dwóch prolongatach loan-001 dochodzi do `maxrenewdate` (REQ-L5) i kolejne są no-opem,
+# więc przy powtarzanych uruchomieniach przeciwko tej samej, długo żyjącej instancji check akceptuje też
+# termin bez zmian, o ile kolejne +14 dni przekroczyłoby `maxrenewdate`.
 set -uo pipefail
 cd "$(dirname "$0")"
 source ./lib.sh
@@ -78,17 +79,26 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-echo "-- REQ-13 --"
-before=$(echo "$LOANS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(l['duedate'] for l in d['data']['loans']['loan'] if l['loanid']=='loan-001'))")
+echo "-- REQ-13 / REQ-L5 --"
+loan001() {
+    python3 -c "import json,sys; d=json.load(sys.stdin); l=next(l for l in d['data']['loans']['loan'] if l['loanid']=='loan-001'); print(l['duedate'], l['maxrenewdate'], l['loanstatus'])"
+}
+read -r before max_renew _ <<<"$(echo "$LOANS_JSON" | loan001)"
 curl -sS -o /dev/null -X POST "$BASE_URL/primaws/rest/priv/myaccount/renew_loans?lang=pl" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"id":"loan-001"}'
-after=$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/loans" -H "Authorization: Bearer $TOKEN" |
-    python3 -c "import json,sys; d=json.load(sys.stdin); print(next(l['duedate'] for l in d['data']['loans']['loan'] if l['loanid']=='loan-001'))")
-if [ "$before" != "$after" ]; then
-    printf "  PASS  %-55s (%s -> %s)\n" "renew_loan realnie przesuwa duedate" "$before" "$after"
+read -r after _ status <<<"$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/loans" -H "Authorization: Bearer $TOKEN" | loan001)"
+at_limit=$(python3 -c "
+import sys; from datetime import datetime, timedelta
+due = datetime.strptime(sys.argv[1], '%Y%m%d') + timedelta(days=14)
+print(due.strftime('%Y%m%d') > sys.argv[2])" "$before" "$max_renew")
+if [ "$after" \> "$before" ] && [ "$after" \< "$max_renew" -o "$after" = "$max_renew" ] && [ "$status" = "Prolongowano" ]; then
+    printf "  PASS  %-55s (%s -> %s, %s)\n" "renew_loan realnie przesuwa duedate" "$before" "$after" "$status"
+    PASS=$((PASS + 1))
+elif [ "$after" = "$before" ] && [ "$at_limit" = "True" ]; then
+    printf "  PASS  %-55s (%s, limit %s)\n" "renew_loan na limicie maxrenewdate -> bez zmian" "$after" "$max_renew"
     PASS=$((PASS + 1))
 else
-    printf "  FAIL  %-55s (bez zmian: %s)\n" "renew_loan nie przesunął duedate" "$before"
+    printf "  FAIL  %-55s (%s -> %s, limit %s, %s)\n" "renew_loan" "$before" "$after" "$max_renew" "$status"
     FAIL=$((FAIL + 1))
 fi
 
@@ -238,6 +248,30 @@ ok=$([ "$(count_docs "series,contains,Pan Tadeusz")" = "0" ] && echo True || ech
 check_true "GET /pnxs series słowem z tytułu -> 0 wyników" "$ok"
 code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/pub/pnxs/L/almanieistniejacy?vid=MOCK:MOCK")
 check_status "GET /pnxs/L nieznany rekord -> 200 (nie 404)" 200 "$code"
+
+echo "-- REQ-L1..L4 --"
+ok=$(echo "$LOANS_JSON" | python3 -c "
+import json, sys
+e = json.load(sys.stdin)['data']['loans']
+keys = {'callnumber2', 'year', 'itemcategoryname', 'maxrenewdate', 'renewstatuses', 'alerts', 'itemid'}
+print(e['historicloans'] == 'Y' and all(keys <= l.keys() and l['duehour'] == '2359' and l['year'].endswith('.') for l in e['loan']))
+" 2>/dev/null || echo "błąd parsowania")
+check_true "GET /loans -> klucze REQ-L1, duehour 2359, rok z kropką" "$ok"
+ok=$(echo "$LOANS_JSON" | python3 -c "
+import json, sys
+loans = json.load(sys.stdin)['data']['loans']['loan']
+print(all(l['renewstatuses']['renewstatus'] for l in loans if l['renew'] == 'N') and any(' / ' in l['title'] for l in loans))
+" 2>/dev/null || echo "błąd parsowania")
+check_true "GET /loans -> komunikat przy renew=N, tytuł z „ / ”" "$ok"
+ok=$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/loans?bulk=50&lang=pl&offset=1&type=history" \
+    -H "Authorization: Bearer $TOKEN" | python3 -c "
+import json, sys
+e = json.load(sys.stdin)['data']['loans']; h = e['loan']
+active = {l['loanid'] for l in json.loads(sys.argv[1])['data']['loans']['loan']}
+print(3 <= len(h) <= 5 and 'Y' not in e['showmore'] and not active & {l['loanid'] for l in h}
+      and all('returndate' in l and 'renewstatuses' not in l and l['renew'] == 'N' for l in h))
+" "$LOANS_JSON" 2>/dev/null || echo "błąd parsowania")
+check_true "GET /loans?type=history -> osobna lista ze zwrotem" "$ok"
 
 echo
 echo "=== Podsumowanie: $PASS PASS, $FAIL FAIL ==="

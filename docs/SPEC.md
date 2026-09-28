@@ -21,7 +21,8 @@ nie jest administratorem sieci OMNIS i nie może podać prawdziwych danych logow
 Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b), Layer 2 (wyszukiwarka katalogu —
 REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) oraz anonimowe wyszukiwanie tokenem gościa i wyszukiwanie po
 autorze (REQ-G1..REQ-G5), a także wyszukiwanie po serii i rekord `pnxs/L/alma{mmsid}` (REQ-G6) są
-zaimplementowane i muszą działać. `/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz „Poza
+zaimplementowane i muszą działać. Do tego pełny kształt wypożyczeń dla okna „Szczegóły” w omnis-mobile
+i osobna historia wypożyczeń (REQ-L1..REQ-L5). `/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz „Poza
 zakresem” niżej.
 
 ### Konto demo
@@ -95,7 +96,7 @@ Nagłówek: `Authorization: Bearer <token>`.
   dwa różne formaty kwoty na dwóch różnych endpointach, to zamierzona cecha prawdziwego Primo, nie błąd.**
   Wartość liczbowa powinna być spójna z sumą kar w fixture (patrz "Dane demo").
 
-#### 4. `GET /primaws/rest/priv/myaccount/loans?bulk=&lang=pl&offset=&type=active`
+#### 4. `GET /primaws/rest/priv/myaccount/loans?bulk=&lang=pl&offset=&type=active|history`
 
 Nagłówek: `Authorization: Bearer <token>`.
 
@@ -124,6 +125,39 @@ Nagłówek: `Authorization: Bearer <token>`.
   klienta w nieskończonej pętli HTTP**, nie zwraca błędu. To jedyny sposób, żeby ten mock realnie "zawiesił"
   aplikację kliencką, więc traktuj to jako wymóg krytyczny, nie stylistyczny.
 
+Pełny kształt wypożyczeń i historia (REQ-L1..REQ-L5, zlecenie
+`omnis-mobile/docs/omnis-mock-loan-details-spec.md`, kształt z odpowiedzi na żywo z Raczyńskich
+2026-09-28). Wszystko jest **addytywne** względem REQ-10: klucze REQ-10 zostają, a `omnis-py` (pydantic)
+ignoruje nadmiarowe klucze.
+
+- **REQ-L1**: każdy aktywny `loan` ma dodatkowo `callnumber2`, `year` (**z kropką na końcu**, np.
+  `"2000."`), `itemcategorycode`, `itemcategoryname`, `itemstatusname`, `itemid`, `maxrenewdate`
+  (`YYYYMMDD`, względem dziś), `renewstatuses`, `alerts` (`[]`), `mainlocationcode`,
+  `secondarylocationcode`, `ilsinstitutioncode`, `nzmmsid` i `nzilsinstitutioncode`. Koperta `data.loans`
+  ma dodatkowo `"historicloans": "Y"` i `"hasAlerts": false` (dla obu typów). Identyfikatory i kody są
+  celowo mockowe (`MOCK-ITEM-…`, `MOCK`, `MOCK_NETWORK`), nie w formacie Alma. Kody lokalizacji są takie
+  same jak `libraryCode`/`subLocationCode` holdingu tego samego rekordu w katalogu, a `year` jak
+  `creationdate` rekordu.
+- **REQ-L2**: `renewstatuses` = `{"renewstatus": [<string>, ...]}`. Każde wypożyczenie z `renew: "N"` ma
+  komunikat: „Okres, na który można dokonać prolongaty to 7 dni przed datą zwrotu” (tekst widziany na żywo)
+  i „Osiągnięto limit prolongat” (tekst przykładowy). Ten drugi jest **gołym stringiem** zamiast listy.
+  Primo potrafi tak zwijać jednoelementowe tablice, więc to test odporności klienta. Odnawialne mają pustą
+  listę.
+- **REQ-L3**: realistyczne wartości istniejących pól:
+  - `loanstatus` to `"Zwykłe"` albo `"Prolongowano"` (Primo z `lang=pl`), a nie `"Active"`.
+  - `duehour` = `"2359"` (bez dwukropka).
+  - `secondarylocationname` = adres filii (jak w Raczyńskich), w jednym wypożyczeniu `null`.
+  - `title` z oznaczeniem odpowiedzialności po „ / ” (np. „Lalka / Bolesław Prus.”), z wyjątkiem jednego
+    tytułu bez „ / ”. Katalog (`search_data.py`) dalej używa krótkiego tytułu dzieła (`_LOAN_TEMPLATES`
+    trzyma oba: `title` i `loan_title`).
+- **REQ-L4**: `type=history` zwraca osobną, statyczną listę 4 zakończonych wypożyczeń (daty w przeszłości
+  względem dziś). Każda inna wartość `type` albo jej brak zwraca aktywne. Pozycja historii ma klucze REQ-10
+  i REQ-L1 oraz `returndate` (`YYYYMMDD`) i `returnhour` (`"HHMM"`). Nie ma `renewstatuses`,
+  `maxrenewdate` ani `alerts`, a `renew` jest zawsze `"N"`. `loanstatus` jest mieszany, jedna pozycja jest
+  „Ubytkowany” / „W procesie” z `secondarylocationname` „Księga ubytków FD1”. `mmsid` to edycje z katalogu,
+  więc `pnxs/L/alma{mmsid}` zwraca rekord. REQ-11 (`showmore` bez `"Y"`) dotyczy też historii.
+  `myaccount/counters` liczy tylko aktywne wypożyczenia.
+
 #### 5. `POST /primaws/rest/priv/myaccount/renew_loans?lang=pl`
 
 Nagłówek: `Authorization: Bearer <token>`, `Content-Type: application/json`. Body: `{"id": "<loanid>"}`.
@@ -133,6 +167,12 @@ Nagłówek: `Authorization: Bearer <token>`, `Content-Type: application/json`. B
   status), **i** stan w pamięci procesu musi się zmienić tak, by kolejne `GET .../loans` zwróciło **nowy,
   późniejszy `duedate`** dla tego loanu (np. `+14 dni` od aktualnego terminu). Bez tej mutacji cały sens
   demonstrowania prolongaty znika.
+- **REQ-L3/REQ-L5**: po udanej prolongacie `loanstatus` tego wypożyczenia zmienia się na `"Prolongowano"`.
+  Prolongata nie przesuwa `duedate` poza `maxrenewdate`. Jeśli by przesunęła, albo jeśli wypożyczenie ma
+  `renew: "N"`, odpowiedź to `200` bez zmiany stanu, tak jak w REQ-13b. `loan-001` (pierwsze z
+  `renew: "Y"`, prolongowane przez `tests/test_contract.py` i `run_all.sh`) mieści dokładnie dwie
+  prolongaty. Na długo żyjącej instancji (Render) kolejne uruchomienia `run_all.sh` dochodzą do limitu, więc
+  check prolongaty akceptuje też termin bez zmian na limicie.
 - **REQ-13b**: nieznany `id` → `200` (no-op, nie `404`) — celowa decyzja, żeby nie testować ścieżek błędów,
   których `omnis-py` i tak nie obsługuje specjalnie (każdy status ≠ 2xx poza `login`'s `401` leci przez
   `raise_for_status()` jako wyjątek).
@@ -331,6 +371,12 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
 - **Daty liczone względem `date.today()` w momencie odpowiedzi, nie hardkodowane** — inaczej demo
   "zestarzeje się" (wszystko stanie się przeterminowane) tydzień po wdrożeniu. Trzymaj w kodzie *przesunięcia*
   (`timedelta` względem dziś), nie absolutne daty.
+- **Realistyczne pola (REQ-L1..L3)**: tytuły z oznaczeniem odpowiedzialności (`"Dziady"` bez), adres
+  filii w `secondarylocationname` (`"Quo Vadis"` bez), sygnatura, rok, kategoria egzemplarza,
+  `maxrenewdate`. Dwa nieodnawialne: `"Quo Vadis"` (termin za > 7 dni) i `"Dziady"` (już prolongowane,
+  limit prolongat).
+- **Historia (REQ-L4)**: 4 zakończone wypożyczenia (`_HISTORY_TEMPLATES` w `data.py`) z fikcyjnych dzieł
+  katalogu, nie z aktywnych.
 - Stan po `renew_loan` — w pamięci procesu (moduł-level, jedno konto = brak potrzeby na sesyjność per-user).
   Restart procesu resetuje wszystko do stanu początkowego. To jest zamierzone, nie luka.
 
@@ -406,3 +452,8 @@ prawdziwy `OmnisClient.get_record_details`. REQ-G2 sprawdza prawdziwy `OmnisClie
 logowania**, z tokenem gościa: asercja na `due_date`, która dowodzi, że `ILSServices/holdings` przyjął
 token gościa. Reszta to surowe `httpx`, bo `omnis-py` nie ma API do `guestJwt` ani `q=creator`, a
 `get_loans()` wywróciłby się na `"data": null` z REQ-G3, zamiast pozwolić to sprawdzić.
+
+Dla REQ-L1..REQ-L5: `tests/test_loan_details.py`. Prawdziwy `OmnisClient` sprawdza, że aktywne
+wypożyczenia i `get_loans("history")` dalej się parsują. Nowe klucze, których `omnis-py` nie deklaruje,
+sprawdzają surowe asercje `httpx`, a obcięcie tytułu używa kopii `displayTitle` z `Models.kt`. Kotlinowy
+`LoanResponseItem` nie jest pokryty automatycznie (patrz pułapka o Kotlinie w `CLAUDE.md`).

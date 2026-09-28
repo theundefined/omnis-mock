@@ -116,3 +116,38 @@ _(nie realizowana w tej sesji)_
   `404`. Test `test_omnis_py_get_record_details_parses_record` to sprawdza.
 - Testy: `pytest` 39/39, `ruff`/`black` czyste, `run_all.sh` lokalnie 32/32, `19_series_search.sh`
   uruchomiony ręcznie.
+
+## REQ-L1..REQ-L5 — pełny kształt wypożyczeń + osobna historia
+
+- Data: 2026-09-28
+- Źródło: `omnis-mobile/docs/omnis-mock-loan-details-spec.md` (okno „Szczegóły wypożyczenia”, kształt z
+  odpowiedzi na żywo z Raczyńskich), przeniesione do `docs/SPEC.md` (endpointy 4 i 5, „Dane demo”).
+  Implementacja w sesji głównej.
+- Opcjonalne punkty zlecenia wdrożone oba: goły string w `renewstatus` (REQ-L2) i limit `maxrenewdate`
+  (REQ-L5).
+- Decyzje:
+  - Tytuł: nowe pole `loan_title` w `_LOAN_TEMPLATES`. `title` zostaje krótkim tytułem dzieła dla katalogu,
+    więc wyszukiwarka, serie i istniejące testy się nie zmieniają. `tests/test_guest_search.py` szuka
+    wypożyczeń po `loanid` zamiast po tytule.
+  - „Dziady” (`loan-004`) zmienione na `renew: "N"` z początkowym statusem „Prolongowano” i powodem
+    „Osiągnięto limit prolongat”, żeby były dwa różne powody (REQ-L2). Odnawialne zostają `loan-001` i
+    przeterminowane `loan-002`.
+  - Prolongata wypożyczenia z `renew: "N"` jest teraz no-opem `200`, a wcześniej przesuwała termin. W
+    prawdziwym Primo takie wypożyczenie się nie przedłuża, a klienci i tak nie wysyłają dla niego
+    `renew_loans`.
+  - `loanstatus` „Prolongowano” wynika z `_renewal_extensions` (albo `renewed_before` w szablonie), bez
+    nowego stanu. `reset_state()` dalej resetuje wszystko.
+  - `BRANCH_ADDRESS` i `location_code()` przeniesione z `search_data.py` do `data.py` (import w drugą stronę
+    byłby cykliczny). Adres, kody lokalizacji i rok wypożyczenia są spójne z holdingiem i `creationdate`
+    rekordu w katalogu.
+  - Identyfikatory (`itemid`, `nzmmsid`, kody instytucji) celowo mockowe, bez kopiowania przykładowych
+    numerów ze zlecenia.
+  - Historia: 4 pozycje z fikcyjnych dzieł katalogu (`MOCK-SEARCH-A1/A2/B1/C1`), więc rekord istnieje.
+  - Odnawialne wypożyczenia mają `renewstatuses: {"renewstatus": []}`. Tego kształtu nie widzieliśmy na
+    żywo; zlecenie mówi tylko o nieodnawialnych.
+- `run_all.sh`: check prolongaty (REQ-13 / REQ-L5) akceptuje termin bez zmian, jeśli kolejne +14 dni
+  przekroczyłoby `maxrenewdate` (żywy Render trzyma stan między uruchomieniami). Nowa sekcja REQ-L1..L4 (3
+  checki) i skrypt `20_loan_history.sh`.
+- Testy: `pytest` 48/48 (nowy `tests/test_loan_details.py`, w tym `omnis-py` `get_loans("history")`),
+  `ruff`/`black` czyste. `run_all.sh` lokalnie uruchomiony 3 razy pod rząd na tej samej instancji: 35/35
+  za każdym razem, a trzeci przebieg przeszedł gałęzią „na limicie”.

@@ -68,10 +68,11 @@ silniej niż jakiekolwiek ręcznie pisane assercje. Ten plik jest kontraktem QA 
 ```
 src/omnis_mock/
   main.py         FastAPI — routing; dokładny kształt JSON per endpoint w docs/SPEC.md (REQ-1..REQ-18b,
-                  REQ-G1..G6)
+                  REQ-G1..G6, REQ-L1..L5)
   auth.py         fake JWT (3 segmenty, payload ASCII-only — REQ-4) + dwa rejestry tokenów (in-memory):
                   z logowania i gościa (guestJwt, REQ-G1); token_kind() je rozróżnia
-  data.py         fixture wypożyczeń demo-konta + stan po renew_loan (in-memory, resetowany co proces)
+  data.py         fixture wypożyczeń demo-konta (aktywne + osobna historia, type=history) + stan po
+                  renew_loan (in-memory, resetowany co proces); adresy/kody filii wspólne z katalogiem
   search_data.py  fixture katalogu (3 fikcyjne dzieła + 4 wygenerowane z data._LOAN_TEMPLATES, ten sam
                   mmsid co odpowiedni loan, oznaczone jako unavailable) dla wyszukiwarki — bezstanowy,
                   bez odpowiednika renew_loan
@@ -84,7 +85,8 @@ są w pełni zaimplementowane. Layer 1 zweryfikowany niezależnie przez QA (`doc
 wdrożony (`docs/DEPLOY_NOTES.md`); Layer 2 zweryfikowany `tests/test_search_contract.py` (analogiczny
 oracle do Layer 1 — prawdziwy `OmnisClient`). Anonimowe wyszukiwanie tokenem gościa, wyszukiwanie po
 autorze i serii oraz rekord `pnxs/L/alma{mmsid}` (REQ-G1..G6, zlecenie z `omnis-mobile/docs/omnis-mock-guest-search-spec.md`) —
-`tests/test_guest_search.py`. Pełna lista pól JSON per endpoint Layer 2 i uzasadnienie
+`tests/test_guest_search.py`. Pełny kształt wypożyczeń dla okna „Szczegóły” i historia (REQ-L1..L5, zlecenie
+`omnis-mobile/docs/omnis-mock-loan-details-spec.md`) — `tests/test_loan_details.py`. Pełna lista pól JSON per endpoint Layer 2 i uzasadnienie
 które pole jest zwracane przez realne Primo i kto (`omnis-py`/`omnis-mobile`) je faktycznie konsumuje:
 `docs/API_FIELDS.md`.
 
@@ -124,6 +126,13 @@ gitignored, nigdy nie commitować.
 - `GET pnxs/L/alma{mmsid}` dla nieznanego rekordu zwraca **200 z pustą kopertą bez `pnx`**, a nie 404,
   tak jak prawdziwe Primo (REQ-G6). `omnis-mobile` traktuje to jako „sprawdzone, bez serii”. `404`
   powodowałby ponawianie zapytania przy każdym odświeżeniu wypożyczeń.
+- `_LOAN_TEMPLATES` ma dwa tytuły: `title` (krótki, z niego `search_data` buduje katalog, na nim stoją testy
+  wyszukiwarki) i `loan_title` (z „ / odpowiedzialność”, zwracany w `myaccount/loans`, REQ-L3). Nie zlewaj
+  ich w jedno, bo zmienisz tytuły w katalogu.
+- Prolongata ma limit `maxrenewdate` (REQ-L5): `loan-001` mieści dokładnie dwie. Na żywym Render stan żyje
+  między uruchomieniami `run_all.sh`, więc od trzeciego check prolongaty przechodzi przez gałąź „na limicie,
+  bez zmian”. `tests/test_contract.py` prolonguje `loan-001` raz, więc zmniejszenie limitu poniżej jednej
+  prolongaty wywali kontrakt QA.
 - `omnis-mobile` ma w pełni podpiętą pod UI wyszukiwarkę katalogu (`SearchScreen`) — od Fazy 3 `/pnxs`
   zwraca realne (fikcyjne) wyniki dla trafiających zapytań, `{"docs": []}` tylko gdy nic nie pasuje
   (REQ-14). `omnis-mobile`'s `data class Holding` (Kotlin, `Models.kt`) ma już pole `holKey` i

@@ -104,20 +104,6 @@ _EDITIONS_C: list[dict[str, Any]] = [
 ]
 
 
-def _library_code_from_location(main_location: str) -> str:
-    """ "Filia Demo 1" -> "FD1" — sam styl kodów co w `_EDITIONS_A/B/C` wyżej."""
-    number = main_location.rsplit(" ", 1)[-1]
-    return f"FD{number}"
-
-
-# Adres filii — jeden na filię, ten sam co w `_EDITIONS_A/B/C` wyżej (od REQ-G6 rekord `pnxs/L/alma{mmsid}`
-# pokazuje adres filii wypożyczenia w omnis-mobile, więc rozjazd byłby widoczny).
-_BRANCH_ADDRESS: dict[str, str] = {
-    "Filia Demo 1": "ul. Testowa 1",
-    "Filia Demo 2": "ul. Próbna 2",
-    "Filia Demo 3": "ul. Demowa 3",
-}
-
 # SPEC.md REQ-G6: seria (`addata.seriestitle`) dla dzieł z wypożyczeń demo, w prawdziwym formacie Primo —
 # dwa tomy tej samej serii z RÓŻNYM zapisem tomu/odpowiedzialności (omnis-mobile tnie nazwę serii na
 # pierwszym `;` i ` / `, a numer tomu bierze z pierwszej liczby po `;`). Oba to wypożyczenia konta demo, więc
@@ -138,7 +124,7 @@ def _works_from_loans() -> list[dict[str, Any]]:
     """
     works = []
     for tmpl in data._LOAN_TEMPLATES:
-        library_code = _library_code_from_location(tmpl["mainlocationname"])
+        library_code = data.location_code(tmpl["mainlocationname"])
         works.append(
             {
                 "frbrgroupid": f"MOCK-GROUP-{tmpl['loanid'].upper()}",
@@ -154,13 +140,14 @@ def _works_from_loans() -> list[dict[str, Any]]:
                     {
                         "mmsid": tmpl["mmsid"],
                         "edition_label": "Wydanie biblioteczne",
-                        "date": "2000",
+                        "date": data.LOAN_EDITION_YEAR,
                         "isbn": f"9788300{tmpl['loanid'][-3:]}0000",
                         "format_display": "320 stron ; 21 cm.",
                         "holding": {
                             "main_location": tmpl["mainlocationname"],
                             "library_code": library_code,
-                            "sub_location": _BRANCH_ADDRESS[tmpl["mainlocationname"]],
+                            # Adres filii jak `secondarylocationname` wypożyczeń (REQ-L3) — jedno źródło w `data.py`.
+                            "sub_location": data.BRANCH_ADDRESS[tmpl["mainlocationname"]],
                             "sub_location_code": f"{library_code}dz",
                             "availability_status": "unavailable",
                             "hold_id": f"MOCK-HOLD-{tmpl['loanid'].upper()}",

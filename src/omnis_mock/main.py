@@ -265,11 +265,14 @@ async def counters(request: Request) -> dict | JSONResponse:
 
 
 @app.get("/primaws/rest/priv/myaccount/loans", response_model=None)
-async def loans(request: Request) -> dict | JSONResponse:
-    """SPEC.md REQ-8, REQ-9, REQ-10, REQ-11 — UWAGA REQ-11: showmore nie może zawiesić klienta w pętli."""
+async def loans(request: Request, type: str = "active") -> dict | JSONResponse:
+    """SPEC.md REQ-8, REQ-9, REQ-10, REQ-11, REQ-L1, REQ-L4 — UWAGA REQ-11: showmore nie może zawiesić
+    klienta w pętli (dotyczy też historii). `type=history` -> osobna lista zakończonych wypożyczeń, każda inna
+    wartość (albo brak) -> aktywne."""
     if (denied := _require_patron(request)) is not None:
         return denied
-    return {"data": {"loans": {"loan": data.get_demo_loans(), "showmore": []}}}
+    loan_list = data.get_demo_history() if type == "history" else data.get_demo_loans()
+    return {"data": {"loans": {"loan": loan_list, "showmore": [], "historicloans": "Y", "hasAlerts": False}}}
 
 
 @app.post("/primaws/rest/priv/myaccount/renew_loans", response_model=None)

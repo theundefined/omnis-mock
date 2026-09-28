@@ -271,7 +271,7 @@ async def test_series_search_from_loan_record_finds_all_volumes(http: httpx.Asyn
     loans = (await http.get("/primaws/rest/priv/myaccount/loans", headers=login_headers)).json()["data"]["loans"][
         "loan"
     ]
-    pan_tadeusz = next(loan for loan in loans if loan["title"] == "Pan Tadeusz")
+    pan_tadeusz = next(loan for loan in loans if loan["loanid"] == "loan-001")
 
     response = await _record(http, pan_tadeusz["mmsid"])
     assert response.status_code == 200
@@ -301,7 +301,7 @@ async def test_record_without_series_and_holding_matches_loan_branch(http: httpx
     loans = (await http.get("/primaws/rest/priv/myaccount/loans", headers=login_headers)).json()["data"]["loans"][
         "loan"
     ]
-    lalka = next(loan for loan in loans if loan["title"] == "Lalka")
+    lalka = next(loan for loan in loans if loan["loanid"] == "loan-002")
 
     body = (await _record(http, lalka["mmsid"])).json()
     assert body["pnx"]["addata"]["seriestitle"] == []
