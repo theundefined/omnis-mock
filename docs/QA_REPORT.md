@@ -311,3 +311,158 @@ REQ-15/16/17/18/18b (pojedyncze zapytanie, `qInclude`, `delivery`, `getPhysicalS
       34/34, `run_all.sh` 28/28). Ten dodatek NIE zmienia wcześniejszego werdyktu PASS dla Layer 1
       (Faza 4/deploy) — jest z nim zgodny i go rozszerza.
 - [ ] **FAIL** — lista blokujących REQ do zwrotu developerowi: _(brak)_
+
+
+---
+
+# 2026-09-28 — REQ-G6 — wyszukiwanie po serii + rekord `pnxs/L/alma{mmsid}`
+
+Weryfikacja niezależna (rola `qa`, bez `Write`/`Edit`) zmian niezacommitowanych w chwili weryfikacji
+(`git status`/`git diff`: `src/omnis_mock/main.py`, `src/omnis_mock/search_data.py`,
+`tests/test_guest_search.py`, `scripts/curl/19_series_search.sh` + dokumentacja). Zakres: REQ-G6 z
+`docs/SPEC.md` (pod REQ-G5), zlecenie `omnis-mobile/docs/omnis-mock-guest-search-spec.md` sekcja "REQ-G6",
+`docs/DEV_NOTES.md` sekcja "REQ-G6". REQ-G1..G5 (70f41db) nie były re-weryfikowane w tej sesji poza
+sprawdzeniem braku regresji (pytest/`run_all.sh`); mają PASS wyżej w tym pliku.
+
+## Metodologia
+
+1. `.venv/bin/pytest -v` → **39/39 PASSED** (5 nowych w `tests/test_guest_search.py`:
+   `test_series_search_from_loan_record_finds_all_volumes`, `test_series_search_matches_series_only`,
+   `test_record_without_series_and_holding_matches_loan_branch`,
+   `test_unknown_record_returns_200_without_pnx`, `test_omnis_py_get_record_details_parses_record`).
+2. `.venv/bin/ruff check src tests` → *All checks passed!*; `.venv/bin/black --check src tests` → *All done*
+   (10 plików bez zmian).
+3. Lokalny serwer (`.venv/bin/uvicorn omnis_mock.main:app --port 8768`, PID zabity po zakończeniu przez
+   `kill`, nie `pkill -f`): `BASE_URL=http://localhost:8768 scripts/curl/run_all.sh` → **32 PASS, 0 FAIL**
+   (4 nowe asercje REQ-G6 na końcu skryptu); `scripts/curl/19_series_search.sh` ręcznie → output zgodny z
+   oczekiwaniami (patrz niżej).
+4. Niezależny skrypt `fastapi.testclient.TestClient` (nie część repo, w scratchpadzie sesji) — przechodzi
+   pełną ścieżkę `omnis-mobile` (login → `GET loans` → dla KAŻDEGO z 4 wypożyczeń: `GET pnxs/L/alma{mmsid}`
+   → emulacja tolerancji parsowania Gson/Kotlin (`toLenientStringListMap`: każda wartość w
+   `display`/`addata`/`facets`/`control` musi być prymitywem/listą prymitywów/`null`, nigdy obiektem
+   zagnieżdżonym w liście) → emulacja `branchInfoFromHoldings`/`looksLikeAddress` → `seriesSearchTerm`/
+   `seriesVolume` → `q=series,contains,...` → `authorSearchTerm` → `q=creator,contains,...`).
+5. Czytanie kodu Kotlin (`omnis-mobile`): `OmnisApi.kt::getRecord`, `Models.kt` (`seriesSearchTerm`,
+   `seriesVolume`, `authorSearchTerm`, `Pnx`, `Holding`, `RecordResponse`), `BranchInfo.kt`
+   (`branchInfoFromHoldings`, `looksLikeAddress`), `OmnisRepository.kt` (`withCatalogDetails`,
+   `getBranchInfo`, `searchBooks` — pochodzenie `BookVersion.series`), `LoanComponents.kt`/`SearchScreen.kt`
+   (wywołania `onSearch`/`searchFor` z `SearchField.SERIES`). Czytanie `omnis-py`
+   (`client.py::get_record_details`, `get_cover_url`, `OmnisClient.__init__`).
+
+## Ścieżka end-to-end per wypożyczenie demo (punkt 3 zlecenia QA — dla KAŻDEGO, nie tylko przykładowego)
+
+| Loan | Tytuł | Parsowanie Kotlin (`Pnx`) | Adres filii (`branchInfoFromHoldings`) | `holKey` | Seria (`seriestitle[0]` → `seriesSearchTerm`/`seriesVolume`) | `series,contains,<term>` | `creator,contains,<authorSearchTerm(au)>` |
+|---|---|---|---|---|---|---|---|
+| loan-001 | Pan Tadeusz | OK, brak obiektów zagnieżdżonych w listach | `Filia Demo 1` → `ul. Wypożyczeń 1` (rozpoznany jako adres) | obecny | `"Dzieła wszystkie / Adam Mickiewicz ; [t. 4]"` → term `"Dzieła wszystkie"`, tom `4` | `["Dziady", "Pan Tadeusz"]` | `["Dziady", "Pan Tadeusz"]` (zawiera własny tytuł) |
+| loan-002 | Lalka | OK | `Filia Demo 2` → `ul. Wypożyczeń 2` (rozpoznany) | obecny | brak serii (`seriestitle: []`) | n/d | `["Lalka"]` |
+| loan-003 | Quo Vadis | OK | `Filia Demo 1` → `ul. Wypożyczeń 1` (rozpoznany) | obecny | brak serii | n/d | `["Quo Vadis"]` |
+| loan-004 | Dziady | OK | `Filia Demo 3` → `ul. Wypożyczeń 3` (rozpoznany) | obecny | `"Dzieła wszystkie ;  3"` → term `"Dzieła wszystkie"`, tom `3` | `["Dziady", "Pan Tadeusz"]` | `["Dziady", "Pan Tadeusz"]` (zawiera własny tytuł) |
+
+Wszystkie 4 wiersze: `pnx`/`delivery` obecne, żadne pole nie łamie tolerancyjnego parsera Kotlin (Gson przez
+`toLenientStringListMap` akceptuje prymityw/listę prymitywów/`null` — sprawdzono, że mock nigdy nie
+zagnieżdża obiektu w liście `display`/`addata`/`facets`/`control`), `seriesVolume` daje poprawne numery
+tomów (`4` i `3`, dokładnie zgodnie z `[t. 4]` i `; 3` we fixture), `series,contains,...` po obcięciu
+zwraca **oba** tomy „Dzieła wszystkie" i **nic więcej**, `creator,contains,...` zawsze zwraca zbiór
+zawierający własny tytuł wypożyczenia.
+
+Dodatkowe regresje sprawdzone tym samym `TestClient`:
+`any,contains,Kroniki` → `0` (słowo istnieje tylko w `seriestitle` Nibylandii, nie w `any`, REQ-15 bez
+zmian); `any,contains,Nibylandii` → `1` (REQ-15 bez regresji); `series,contains,Mickiewicz` → wyłącznie
+`["Pan Tadeusz"]` — dopasowanie trafia w odpowiedzialność `"... / Adam Mickiewicz ; ..."` z `seriestitle`
+loan-001, ale NIE `"Dzieła wszystkie ;  3"` (loan-004), bo ten zapis serii nie zawiera nazwiska autora —
+dokładnie analogiczne do przykładu ze zlecenia („Harry Potter" / „Rowling").
+
+## Weryfikacja zgodności z klientami — REQ-G6
+
+- **`OmnisApi.kt::getRecord`**: `@GET("primaws/rest/pub/pnxs/L/{recordId}")`,
+  `@Path("recordId")`, `@Query("vid")`, `@Query("lang") = "pl"`, zwraca `Response<RecordResponse>` —
+  dokładnie ścieżka i parametry, które obsługuje `pnxs_record()` w `main.py` (mock ignoruje `vid`/`lang`,
+  co jest zgodne z SPEC.md — nie wymaga ich).
+- **`RecordResponse`/`Pnx` w Kotlinie**: `Pnx` ma niestandardowy deserializer (`pnxDeserializer`,
+  `toLenientStringListMap`) zarejestrowany na `createPrimoGson()`, który jest tą samą instancją `Gson`
+  użytą przy tworzeniu klienta Retrofit (`OmnisRepository.createClient`, linia z
+  `GsonConverterFactory.create(createPrimoGson())`) — więc `RecordResponse` z `getRecord()` faktycznie
+  korzysta z tego samego tolerancyjnego parsera co `PnxDoc` z wyszukiwarki. Potwierdzone dla wszystkich 4
+  rekordów wypożyczeń (patrz tabela wyżej) i osobno dla `MOCK-SEARCH-A1`/`MOCK-SEARCH-C1`: żadna wartość w
+  `display`/`addata`/`facets`/`control` nie jest obiektem zagnieżdżonym w liście (jedyny przypadek, który
+  wywaliłby `asString()` po stronie Kotlina).
+- **`seriesSearchTerm`/`seriesVolume`/`authorSearchTerm`** (`Models.kt`) zweryfikowane 1:1 (nie
+  reimplementowane od zera po stronie mocka — `_series_search_term` w `tests/test_guest_search.py` i
+  `19_series_search.sh` to świadome kopie): dla obu zapisów tomu we fixture (`"... ; [t. 4]"` i
+  `"...;  3"`) `seriesSearchTerm` daje identyczny wynik `"Dzieła wszystkie"`, a `seriesVolume` poprawnie
+  odróżnia `4` od `3`.
+- **`BookVersion.series`** (`OmnisRepository.kt::searchBooks`, ~L788) czyta `v.pnx.addataFirst("seriestitle")`
+  — czyli `addata.seriestitle`, NIE `display.series`. To ważne: `_build_pnx()` w mocku ustawia
+  `display.series` na `f"{series}$$Q{series}"` (format z linkiem do przeszukiwania, jak w realnym Primo),
+  co renderowane wprost jako tekst pokazywałoby użytkownikowi widoczny sufiks `$$Q...`. Sprawdzone, że
+  `omnis-mobile` NIGDZIE nie czyta `display.seriestitle`/`display.series` dla tego celu — tylko `addata`,
+  która w mocku jest czystym stringiem bez `$$Q`. Brak ryzyka wycieku `$$Q` do UI dla tej ścieżki.
+- **`branchInfoFromHoldings`/`looksLikeAddress`** (`BranchInfo.kt`): dopasowanie po
+  `mainLocation.trim().equals(wanted, ignoreCase = true)` — potwierdzone dla wszystkich 4 filii demo
+  (`Filia Demo 1/2/3`), `subLocation` w formacie `"ul. Wypożyczeń N"` zawsze rozpoznawany przez
+  `ADDRESS_MARKER` (prefiks `ul.`).
+- **`omnis-py::get_record_details`** parsuje odpowiedź bez wyjątków dla znanego rekordu
+  (`isbns`/`publication_date`/`publisher`/`subjects`/`genres`/`physical_description` czytane przez
+  `.get(..., [None])[0]`/`.get(..., [])`, tolerancyjnie) — potwierdzone testem
+  `test_omnis_py_get_record_details_parses_record` i niezależnie tym samym `TestClient`-em dla
+  `MOCK-SEARCH-A1`. **Brak realnego wyjścia do sieci**: `OmnisClient.__init__` (client.py) przy przekazanym
+  `client=` ustawia `self.client = client` 1:1 (nie tworzy nowego `httpx.AsyncClient`), więc w testach
+  `self.client` to ten sam `httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://mock.local")`
+  co reszta testu. `get_cover_url()` woła `self.client.head("https://covers.openlibrary.org/b/isbn/...")`
+  — `httpx.AsyncClient` z jednym `transport` kieruje TAM WSZYSTKIE żądania niezależnie od hosta w URL-u
+  (transport nie sprawdza hosta), więc to żądanie też trafia do `ASGITransport`→FastAPI, gdzie nie ma
+  pasującej trasy → `404` → warunek `response.status_code == 200` w pętli `get_cover_url` jest fałszywy →
+  `cover_url = None`. Potwierdzone empirycznie (`test_omnis_py_get_record_details_parses_record` asercja
+  `details.cover_url is None`) i przez czytanie kodu — brak realnego zapytania do `covers.openlibrary.org`
+  w całym przebiegu testów/QA tej sesji.
+- **Nieznany rekord** (`GET pnxs/L/almanieistniejacy`) → `200`, body `{"info": {...}, "facets": [], "docs":
+  []}`, klucz `"pnx"` faktycznie NIEOBECNY (nie `null`) — sprawdzone bezpośrednio przez `curl`
+  (`19_series_search.sh`) i `assert "pnx" not in body` w teście. `omnis-mobile::withCatalogDetails` traktuje
+  `!response.isSuccessful` (nieprawda dla 200) inaczej niż brak `pnx` — kod czyta `response.body()?.pnx`,
+  które będzie `null` (Gson zostawia pole domyślne `null` dla `Pnx?`), więc `CatalogDetails(null, null)` —
+  zgodne z komentarzem w kodzie „sprawdzone, bez serii".
+- **Rekord publiczny, bez tokena**: `GET pnxs/L/alma{mmsid}` bez nagłówka `Authorization` → `200` (sprawdzone
+  ręcznie `curl`); z dowolnym (nieznanym) tokenem → również `200`. Zgodne z REQ-G2 (duch, nie dosłowny zakres
+  REQ-G2, ale endpoint 11 w SPEC.md wprost mówi "publiczny i nie sprawdza `Authorization`").
+
+## REQ-G6 — REQ po REQ
+
+| REQ | Opis (skrót) | Werdykt | Notatka |
+|---|---|---|---|
+| REQ-G6 (`q=series,...`) | Case-insensitive substring na CAŁYM `addata.seriestitle` (z tomem i odpowiedzialnością), nie na tytule/autorze; nie wchodzi do `any` | PASS | Sprawdzone dla obu zapisów tomu (`"... / Adam Mickiewicz ; [t. 4]"`, `"... ;  3"`), dla serii z jednym tomem (Nibylandii) i dla braku serii (`[]`). `series,contains,Pan Tadeusz`/`Zmyślak` (słowa z tytułu/autora, nie z serii) → `0`, `any`/`creator` nie łapią frazy z samej serii. |
+| REQ-G6 (rekord, znany) | `GET pnxs/L/alma{mmsid}` → `200` z `{"pnx": <ten sam co w wynikach>, "delivery": {"holding": [<z holKey>]}}`, bez tokena | PASS | Potwierdzone dla wszystkich 4 mmsid wypożyczeń demo ORAZ dla 4 edycji z `_WORKS` (A1/A2/B1/C1). `holKey` obecny we wszystkich. `pnx` tolerancyjnie parsowalny przez Kotlinowy `Pnx`/Gson (brak obiektów zagnieżdżonych w listach). |
+| REQ-G6 (rekord, nieznany) | `200` z pustą kopertą wyszukiwania, BEZ klucza `pnx` (nie `404`) | PASS | Zweryfikowane, że klucz `"pnx"` faktycznie brakuje (nie `null`) — istotne, bo `response.body()?.pnx` w Kotlinie i `data.get("pnx", {})` w Pythonie oba tolerują brak klucza identycznie jak `null`, więc różnica byłaby niewidoczna dla klientów, ale mock i tak trzyma się litery specyfikacji. |
+| Efekt uboczny (`omnis-py`, poza numeracją REQ-G) | `get_record_details`/`omnis-cli --format json/csv` przestają dostawać `404` na tym mocku | PASS | Zweryfikowane niezależnym `TestClient` + testem kontraktowym; brak wyjścia do sieci (łańcuch `OmnisClient.__init__`→`self.client`→wspólny `ASGITransport` opisany wyżej). |
+
+Brak regresji: REQ-14 (`any,contains,Kroniki` → `0`), REQ-15 (`any,contains,Nibylandii` → `1`), REQ-G5
+(`creator,contains,...` nadal zawęża do autora, nie łapie serii), REQ-17/18/18b (`holKey` nadal generowany
+i wymagany) — wszystkie potwierdzone ponownie w tej sesji, nie tylko odziedziczone z poprzedniego PASS.
+
+## Znaleziska (żadne nie blokuje)
+
+| Znalezisko | Ważność |
+|---|---|
+| `docs/DEV_NOTES.md` (REQ-G6) twierdzi: "aplikacja zawsze wysyła niezmieniony fragment `seriestitle`". To nie jest ściśle prawdą — `SearchScreen.kt` pozwala użytkownikowi dowolnie edytować `queryInput` (`OutlinedTextField`, L129) PODCZAS gdy aktywne jest `SearchField.SERIES` (chip pozostaje aktywny do jawnego usunięcia „✕"), więc `q=series,contains,<dowolny wpisany tekst>` jest jak najbardziej możliwe, nie tylko kliknięcie „Seria: …". W praktyce nie zmienia to werdyktu — zlecenie i SPEC.md jawnie akceptują substring zamiast dopasowania po słowach jako świadomy kompromis, niezależnie od źródła zapytania. | Informacyjne — do złagodzenia sformułowania w DEV_NOTES.md, nie blokuje. |
+| **Niespójność adresu tej samej filii między dwoma źródłami danych, teraz widoczna dzięki REQ-G6**: rekordy pochodzące z `data._LOAN_TEMPLATES` (`_works_from_loans()`) mają `sub_location: "ul. Wypożyczeń N"` dla „Filia Demo N", a ręcznie zdefiniowane edycje w `_EDITIONS_A/B/C` (te same nazwy filii, np. „Filia Demo 1") mają `sub_location: "ul. Testowa 1"`/`"ul. Próbna 2"`/`"ul. Demowa 3"`. Zweryfikowane bezpośrednio: `alma MOCK-SEARCH-A1` → `Filia Demo 1 / ul. Testowa 1`, ale `alma mock-mms-001` (Pan Tadeusz, też Filia Demo 1) → `Filia Demo 1 / ul. Wypożyczeń 1`. Niespójność istnieje od commita `a2023eb` (przed REQ-G6), ale wtedy `pnxs/L/alma{mmsid}` zwracał `404`, więc `getBranchInfo` nigdy nie renderował adresu z rekordu wypożyczenia — REQ-G6 pierwszy raz czyni to widocznym: użytkownik otwierający wypożyczenie zobaczy jeden adres dla „Filia Demo 1", a wynik wyszukiwania katalogu dla tej samej filii — inny. | Niska/informacyjna — dane fikcyjne, żaden REQ w SPEC.md nie wymaga spójności adresu między `_WORKS` a `_works_from_loans()`; nie łamie żadnego assercji klienta (oba formaty przechodzą `looksLikeAddress`). Warto rozważyć ujednolicenie przy najbliższej zmianie fixture, nie blokuje Fazy 4. |
+| Real Primo rozróżnia `400` (mmsid w nieprawidłowym formacie) od `200` pustej koperty (nieznany, ale poprawny format) — mock zawsze zwraca `200`, bez względu na format `record_id`. Already jawnie udokumentowane i uzasadnione w `docs/API_FIELDS.md`/`docs/DEV_NOTES.md` ("wszystkie mmsid mocka są nie-numeryczne") — nie jest to ukryte odstępstwo. | Informacyjne, świadoma i udokumentowana decyzja, zgodna z `docs/SPEC.md` (SPEC.md w ogóle nie obiecuje `400` dla tego endpointu). |
+| Wcześniejsze zdanie w `CLAUDE.md` ("`omnis-mobile`'s `Holding` nie ma `holKey`") zostało w tym diffie poprawione na aktualne — potwierdzone czytaniem `Models.kt` (`holKey: String? = null` obecne, L329). | Pozytywne — nie jest to nowy problem, odnotowuję jako potwierdzenie, że dokumentacja jest teraz zgodna ze stanem faktycznym. |
+
+## Werdykt końcowy (REQ-G6)
+
+- [x] **PASS** — REQ-G6 (pole `series` w `q` + `GET pnxs/L/alma{mmsid}`) zaimplementowane zgodnie ze
+      zleceniem `omnis-mobile/docs/omnis-mock-guest-search-spec.md` i `docs/SPEC.md`, zweryfikowane
+      niezależnie dla WSZYSTKICH 4 wypożyczeń demo (nie tylko przykładu z testów dewelopera) oraz przez
+      czytanie faktycznego kodu Kotlin/Python klientów (`getRecord`, `seriesSearchTerm`, `seriesVolume`,
+      `authorSearchTerm`, `BookVersion.series`, `branchInfoFromHoldings`, `get_record_details`,
+      `get_cover_url`). Brak regresji na REQ-1..REQ-G5 (`pytest` 39/39, `run_all.sh` 32/32,
+      `19_series_search.sh` zgodny z oczekiwaniami). Ten dodatek NIE zmienia wcześniejszego werdyktu PASS
+      dla REQ-G1..G5/Layer 1/Layer 2 — jest z nim zgodny i go rozszerza. Gotowe do Fazy 4 (deploy),
+      z zastrzeżeniem dwóch informacyjnych, niskiej wagi znalezisk wyżej (do rozważenia przy okazji, nie
+      blokujących).
+- [ ] **FAIL** — lista blokujących REQ do zwrotu developerowi: _(brak)_
+
+> **Adnotacja developera po QA (2026-09-28):** znaleziska 1 i 2 poprawione przed commitem. Opis w
+> SPEC.md/DEV_NOTES.md mówi teraz, że niezmieniony `seriestitle` wysyła kliknięcie „Seria: …”, a tekst
+> może też zostać wpisany ręcznie. Dzieła z wypożyczeń mają adres filii z `_BRANCH_ADDRESS`, taki sam jak
+> w `_EDITIONS_A/B/C` („Filia Demo 1” → „ul. Testowa 1” itd.), więc tabela wyżej pokazuje stan sprzed
+> poprawki. `pytest` po poprawce: 39/39.

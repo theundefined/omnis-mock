@@ -187,6 +187,18 @@ async def pnxs_search(request: Request) -> dict | Response:
     }
 
 
+@app.get("/primaws/rest/pub/pnxs/L/{record_id}")
+async def pnxs_record(record_id: str) -> dict:
+    """SPEC.md REQ-G6 — pełny rekord (`pnx` + `delivery.holding`), bez tokena. omnis-mobile bierze stąd
+    serię i autora wypożyczeń oraz adres filii, omnis-py — `get_record_details`. Nieznany rekord -> 200 z
+    pustą kopertą wyszukiwania BEZ `pnx` (tak odpowiada prawdziwe Primo, NIE 404 — omnis-mobile zapisuje to
+    jako "sprawdzone, bez serii")."""
+    found = search_data.record(record_id)
+    if found is None:
+        return {"info": {"total": 0, "first": 0, "last": 0}, "facets": [], "docs": []}
+    return found
+
+
 @app.post("/primaws/rest/pub/delivery")
 async def pnxs_delivery(request: Request) -> list:
     """SPEC.md REQ-17 — dostępność per filia dla podanych alma-id. Body to goła lista stringów JSON

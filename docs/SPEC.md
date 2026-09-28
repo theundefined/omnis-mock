@@ -20,8 +20,9 @@ nie jest administratorem sieci OMNIS i nie może podać prawdziwych danych logow
 
 Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b), Layer 2 (wyszukiwarka katalogu —
 REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) oraz anonimowe wyszukiwanie tokenem gościa i wyszukiwanie po
-autorze (REQ-G1..REQ-G5) są zaimplementowane i muszą działać. `get_record_details`,
-`/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz "Poza zakresem" niżej.
+autorze (REQ-G1..REQ-G5), a także wyszukiwanie po serii i rekord `pnxs/L/alma{mmsid}` (REQ-G6) są
+zaimplementowane i muszą działać. `/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz „Poza
+zakresem” niżej.
 
 ### Konto demo
 
@@ -259,6 +260,32 @@ Wywołanie aplikacji: `?isGuest=true&lang=pl&targetUrl=<dowolny URL>&viewId=MOCK
     `q=creator,...`, co nie ma wpływu na wynik.
   - Format autora w katalogu: patrz „Dane katalogu” niżej (`addata.au` = „Nazwisko, Imię”).
 
+- **REQ-G6** (pole `series` w `q` + rekord). Zlecenie zostało rozszerzone 2026-09-28 dla `omnis-mobile`
+  v0.6.1/v0.6.2.
+  - `q=series,contains,<nazwa>` → case-insensitive substring (po tej samej normalizacji co REQ-G5)
+    **wyłącznie** na całym `addata.seriestitle`, łącznie z tomem i odpowiedzialnością. Nie dopasowuje
+    tytułu ani autora. Aplikacja wysyła nazwę serii obciętą od pierwszego `;` i od pierwszego ` / `:
+    `"Dzieła wszystkie / Adam Mickiewicz ; [t. 4]"` → `Dzieła wszystkie`. Na prawdziwym Primo (BRACZ,
+    2026-09-28) dopasowanie działa na słowach (`series,contains,Potter Harry` = 30, tak samo jak `Harry
+    Potter`), a mock świadomie używa substringu, zgodnie ze zleceniem. Kliknięcie „Seria: …” wysyła
+    niezmieniony fragment `seriestitle`, więc wynik jest ten sam. Różnica może się pojawić tylko przy
+    tekście wpisanym ręcznie w trybie wyszukiwania po serii.
+  - `series` nie wchodzi do dopasowania `any` (REQ-15 bez zmian).
+
+#### 11. `GET /primaws/rest/pub/pnxs/L/{recordId}` — pełny rekord (REQ-G6)
+
+`recordId` = `alma<mmsid>`, query `vid`, `lang`. Endpoint jest publiczny i nie sprawdza `Authorization`.
+
+- **REQ-G6 (rekord)**: znany rekord → `200` z `{"pnx": <ten sam pnx co w wynikach wyszukiwania>,
+  "delivery": {"holding": [<ten sam holding co w REQ-17, z holKey>]}}`.
+  - `omnis-mobile` (v0.6.2) bierze stąd `addata.seriestitle` i `addata.au` wypożyczeń, bo API wypożyczeń
+    serii nie podaje. Adres filii dobiera przez `delivery.holding[].mainLocation` == `mainlocationname`
+    wypożyczenia.
+  - `omnis-py` (`get_record_details`) czyta `pnx.display`/`addata.isbn`.
+- Nieznany rekord → `200` z pustą kopertą wyszukiwania `{"info": {"total": 0, ...}, "facets": [], "docs":
+  []}`, **bez `pnx`**. Tak odpowiada prawdziwe Primo, **nie** `404`. `omnis-mobile` zapisuje to jako
+  „sprawdzone, bez serii” i nie ponawia zapytania.
+
 ## Endpointy pomocnicze (poza kontraktem Primo)
 
 Nie są częścią API, którego oczekuje `OmnisClient`/`omnis-mobile` — nie testuje ich `tests/test_contract.py`
@@ -282,14 +309,8 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
 
 ## Poza zakresem (Layer 2 zaimplementowane, patrz REQ-14..REQ-18b wyżej; reszta poniżej wciąż nie)
 
-- `GET /primaws/rest/pub/pnxs/L/alma{mmsid}` (`get_record_details` w `omnis-py`) — osobny endpoint od
-  wyszukiwarki, zwraca pełne metadane pojedynczej książki (okładka, ISBN, wydawca). Bez niego `omnis-cli
-  --format json`/`--format csv` (które w odróżnieniu od domyślnego widoku tabelarycznego pobierają te
-  detale) dostają `404` przy próbie wzbogacenia każdego loanu — ale `omnis-py`'s `fetch_account_data` łapie
-  ten błąd per-konto i wpisuje go jako `"error"` w wyniku, więc to CZYSTA degradacja, nie crash i nie utrata
-  reszty danych. Zweryfikowane empirycznie (Faza 1, test manualny z `omnis-cli`) — domyślny widok
-  tabelaryczny (bez `--format json/csv`) i `omnis-mobile`'s `getLoansForAccount` w ogóle tego endpointu nie
-  wołają, więc to nie blokuje głównego celu (recenzja Google Play).
+- `GET /primaws/rest/pub/pnxs/L/alma{mmsid}` przeniesiony do zakresu w REQ-G6 (endpoint 11). Do tego czasu
+  odpowiadał `404`.
 - `/primaws/rest/priv/myaccount/fines` — osobny endpoint, **inny format kwoty**: string typu `"0,20 PLN"`
   (przecinek jako separator dziesiętny + sufiks waluty), parsowany przez `omnis-py`'s `_parse_fine_amount()`.
   To jest **REQ-format-kontrastowy** do REQ-7 wyżej — jeśli kiedyś implementujesz `/fines`, NIE używaj tam
@@ -327,6 +348,11 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
 - Zróżnicowane stany dostępności, jak w "Dane demo" dla wypożyczeń: co najmniej jedna niedostępna wersja z
   terminem **przeszłym** (przeterminowanym, `overdue=True`) i co najmniej jedna z terminem **przyszłym**
   (`overdue=False`) — obie gałęzie reguły "przekroczon" z REQ-18b muszą być pokryte.
+- **Serie (REQ-G6)**: dwa wypożyczenia demo, „Pan Tadeusz” i „Dziady”, należą do serii „Dzieła wszystkie”
+  z różnym zapisem tomu i odpowiedzialności: `"Dzieła wszystkie / Adam Mickiewicz ; [t. 4]"` i `"Dzieła
+  wszystkie ;  3"`. Dzięki temu „Seria: …” przy wypożyczeniu w aplikacji prowadzi do obu tomów. „Cienie
+  Nibylandii” ma serię `"Kroniki Nibylandii / Karolina Nibylska ; 1"`. Pozostałe dzieła są bez serii
+  (`seriestitle: []`).
 - **Format autora (REQ-G5)**: fixture trzyma autora w naturalnej kolejności („Karolina Nibylska”), tak jak
   `display.title` („Cienie Nibylandii / Karolina Nibylska.”) i wypożyczenia w `data.py`, które się nie
   zmieniają. Pola `addata.au`, `addata.addau`, `sort.author` i `display.contributor` mają format prawdziwego
@@ -374,7 +400,9 @@ przez prawdziwego `OmnisClient`, z asercjami na polach liściach (`edition`, `br
 nic nie dowodzi, bo `omnis-py` łyka błędy HTTP z `getPhysicalService`/`ILSServices` po cichu (patrz
 `docs/API_FIELDS.md`, uzasadnienie REQ-18b).
 
-Dla REQ-G1..REQ-G5: `tests/test_guest_search.py`. REQ-G2 sprawdza prawdziwy `OmnisClient` **bez
+Dla REQ-G1..REQ-G6: `tests/test_guest_search.py`. Dla REQ-G6 test odtwarza ścieżkę aplikacji od
+wypożyczenia przez rekord do `q=series`, z kopią `seriesSearchTerm` z `Models.kt`, i sprawdza też
+prawdziwy `OmnisClient.get_record_details`. REQ-G2 sprawdza prawdziwy `OmnisClient` **bez
 logowania**, z tokenem gościa: asercja na `due_date`, która dowodzi, że `ILSServices/holdings` przyjął
 token gościa. Reszta to surowe `httpx`, bo `omnis-py` nie ma API do `guestJwt` ani `q=creator`, a
 `get_loans()` wywróciłby się na `"data": null` z REQ-G3, zamiast pozwolić to sprawdzić.

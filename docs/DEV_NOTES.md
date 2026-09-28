@@ -90,3 +90,29 @@ _(nie realizowana w tej sesji)_
 
   Skrypt weryfikacyjny nie jest w repo, bo robi ruch do prawdziwych bibliotek. Jego odtworzenie to ~100
   linii `httpx` według kroków ze scenariusza akceptacyjnego zlecenia.
+
+## REQ-G6 — wyszukiwanie po serii + rekord `pnxs/L/alma{mmsid}`
+
+- Data: 2026-09-28
+- Źródło: to samo zlecenie z `omnis-mobile`, rozszerzone tego samego dnia (`omnis-mobile` v0.6.1 dodał
+  wyszukiwanie po serii, v0.6.2 pobiera serię i autora wypożyczeń z rekordu katalogu).
+- Weryfikacja na żywym Primo przed implementacją (BRACZ, token gościa):
+  - `series,contains,Harry Potter` = 30, bez względu na wielkość liter i kolejność słów.
+  - `series,contains,Rowling` = 16, czyli dopasowanie obejmuje odpowiedzialność w `seriestitle`.
+  - Rekord → 200 `{…, pnx, delivery{holding}, …}`.
+  - Nieznany numeryczny mmsid → 200 z pustą kopertą wyszukiwania bez `pnx`; mmsid w nieprawidłowym formacie
+    → 400.
+- Decyzje:
+  - Seria dla wypożyczeń: „Pan Tadeusz” i „Dziady” (oba z wypożyczeń demo, ten sam autor) w serii
+    „Dzieła wszystkie”, z dwoma różnymi zapisami tomu. Nowe dzieło (np. drugi tom Nibylandii) zmieniłoby
+    liczbę wyników `any,contains,Nibylandii`, od której zależą istniejące testy i skrypty.
+  - `series` dopasowuje substring (jak zlecenie), a nie wszystkie słowa (jak prawdziwe Primo). Kliknięcie
+    „Seria: …” wysyła niezmieniony fragment `seriestitle`. Ręcznie wpisany tekst w trybie SERIES (pole da
+    się edytować w `SearchScreen`) może w mocku znaleźć mniej niż w Primo, np. przy odwróconej kolejności
+    słów.
+  - Nieznany rekord zwraca pustą kopertę bez `pnx`. Nie ma 400 dla „złego formatu”, bo mmsid mocka są
+    nie-numeryczne.
+- Efekt uboczny: `omnis-py` `get_record_details` (i `omnis-cli --format json/csv`) przestaje dostawać
+  `404`. Test `test_omnis_py_get_record_details_parses_record` to sprawdza.
+- Testy: `pytest` 39/39, `ruff`/`black` czyste, `run_all.sh` lokalnie 32/32, `19_series_search.sh`
+  uruchomiony ręcznie.

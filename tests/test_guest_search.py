@@ -9,6 +9,7 @@ token gościa (dokładnie to, co robi omnis-mobile). Reszta to surowe `httpx`, b
 
 import base64
 import json
+import re
 from collections.abc import AsyncIterator
 from datetime import date, timedelta
 
@@ -245,3 +246,88 @@ async def test_creator_search_returns_all_works_of_author(http: httpx.AsyncClien
     assert sorted(await _titles(http, "creator,contains,Mickiewicz, Adam")) == expected
     assert sorted(await _titles(http, "creator,contains,mickiewicz adam")) == expected
     assert sorted(await _titles(http, "creator,contains,Adam Mickiewicz")) == expected
+
+
+# --- REQ-G6 ---
+
+
+def _series_search_term(series: str) -> str:
+    """Kopia `seriesSearchTerm` z omnis-mobile (`Models.kt`): nazwa serii bez tomu (od pierwszego `;`) i bez
+    odpowiedzialności (od pierwszego ` / `) — dokładnie to, co aplikacja wysyła jako `q=series,...`."""
+    name = series.split(";", 1)[0]
+    name = re.split(r"\s+/\s+", name, maxsplit=1)[0]
+    return name.strip().rstrip(".,:").strip()
+
+
+async def _record(http: httpx.AsyncClient, mmsid: str) -> httpx.Response:
+    return await http.get(f"/primaws/rest/pub/pnxs/L/alma{mmsid}", params={"vid": VIEW, "lang": "pl"})
+
+
+async def test_series_search_from_loan_record_finds_all_volumes(http: httpx.AsyncClient) -> None:
+    """REQ-G6, ścieżka omnis-mobile v0.6.2: seria wypożyczenia z rekordu (`pnxs/L/alma{mmsid}`, bez tokena) ->
+    nazwa serii przycięta jak w aplikacji -> `q=series,contains,<nazwa>` zwraca oba tomy (różny zapis
+    tomu/odpowiedzialności), bez rekordów spoza serii."""
+    login_headers = {"Authorization": f"Bearer {await _login_token(http)}"}
+    loans = (await http.get("/primaws/rest/priv/myaccount/loans", headers=login_headers)).json()["data"]["loans"][
+        "loan"
+    ]
+    pan_tadeusz = next(loan for loan in loans if loan["title"] == "Pan Tadeusz")
+
+    response = await _record(http, pan_tadeusz["mmsid"])
+    assert response.status_code == 200
+    addata = response.json()["pnx"]["addata"]
+    assert addata["au"] == ["Mickiewicz, Adam"]
+    series = addata["seriestitle"][0]
+    assert series == "Dzieła wszystkie / Adam Mickiewicz ; [t. 4]"
+
+    term = _series_search_term(series)
+    assert term == "Dzieła wszystkie"
+    assert sorted(await _titles(http, f"series,contains,{term}")) == sorted(["Pan Tadeusz", "Dziady"])
+
+
+async def test_series_search_matches_series_only(http: httpx.AsyncClient) -> None:
+    """REQ-G6: `series` patrzy tylko na `seriestitle` (case-insensitive), nie na tytuł ani autora; tom z
+    innym zapisem ("Dzieła wszystkie ;  3") też trafia."""
+    assert sorted(await _titles(http, "series,contains,dzieła WSZYSTKIE")) == sorted(["Pan Tadeusz", "Dziady"])
+    assert await _titles(http, "series,contains,Kroniki Nibylandii") == ["Cienie Nibylandii"]
+    assert await _titles(http, "series,contains,Pan Tadeusz") == []
+    assert await _titles(http, "series,contains,Zmyślak") == []
+
+
+async def test_record_without_series_and_holding_matches_loan_branch(http: httpx.AsyncClient) -> None:
+    """REQ-G6: rekord bez serii ma pustą `seriestitle`; `delivery.holding[].mainLocation` odpowiada filii
+    wypożyczenia (omnis-mobile dobiera po tym adres filii — `getBranchInfo`)."""
+    login_headers = {"Authorization": f"Bearer {await _login_token(http)}"}
+    loans = (await http.get("/primaws/rest/priv/myaccount/loans", headers=login_headers)).json()["data"]["loans"][
+        "loan"
+    ]
+    lalka = next(loan for loan in loans if loan["title"] == "Lalka")
+
+    body = (await _record(http, lalka["mmsid"])).json()
+    assert body["pnx"]["addata"]["seriestitle"] == []
+    holding = body["delivery"]["holding"][0]
+    assert holding["mainLocation"] == lalka["mainlocationname"]
+    assert holding["holKey"]
+
+
+async def test_unknown_record_returns_200_without_pnx(http: httpx.AsyncClient) -> None:
+    """REQ-G6: nieznany rekord -> 200 z pustą kopertą wyszukiwania, bez `pnx` (jak prawdziwe Primo), NIE 404."""
+    response = await _record(http, "nieistniejacy-mmsid")
+    assert response.status_code == 200
+    body = response.json()
+    assert "pnx" not in body
+    assert body["docs"] == []
+
+
+async def test_omnis_py_get_record_details_parses_record(http: httpx.AsyncClient) -> None:
+    """REQ-G6: prawdziwy `OmnisClient.get_record_details` parsuje rekord (do tej pory 404 — patrz SPEC.md,
+    "Poza zakresem", historycznie). Okładka z OpenLibrary idzie przez ten sam ASGITransport, więc nie
+    wychodzi do sieci i po prostu jej nie ma."""
+    client = OmnisClient(base_url="http://mock.local", client=http)
+    await client.login(mock_data.DEMO_USERNAME, mock_data.DEMO_PASSWORD, institution=INSTITUTION, view=VIEW)
+
+    details = await client.get_record_details("MOCK-SEARCH-A1")
+
+    assert details.isbns == ["9788300000011"]
+    assert details.publication_date == "2022"
+    assert details.cover_url is None

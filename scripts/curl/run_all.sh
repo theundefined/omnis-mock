@@ -228,6 +228,17 @@ check_true "GET /pnxs creator z przecinkiem -> 1 wynik" "$ok"
 ok=$([ "$(count_docs "creator,contains,Cienie")" = "0" ] && echo True || echo "znaleziono po tytule")
 check_true "GET /pnxs creator słowem z tytułu -> 0 wyników" "$ok"
 
+echo "-- REQ-G6 --"
+ok=$(curl -sS "$BASE_URL/primaws/rest/pub/pnxs/L/almamock-mms-001?vid=MOCK:MOCK" |
+    python3 -c "import json,sys; a=json.load(sys.stdin)['pnx']['addata']; print(bool(a['seriestitle']) and bool(a['au']))" 2>/dev/null || echo "brak pnx")
+check_true "GET /pnxs/L/alma{mmsid} wypożyczenia -> seriestitle + au" "$ok"
+ok=$([ "$(count_docs "series,contains,Dzieła wszystkie")" = "2" ] && echo True || echo "inna liczba tomów")
+check_true "GET /pnxs series -> oba tomy serii" "$ok"
+ok=$([ "$(count_docs "series,contains,Pan Tadeusz")" = "0" ] && echo True || echo "znaleziono po tytule")
+check_true "GET /pnxs series słowem z tytułu -> 0 wyników" "$ok"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/pub/pnxs/L/almanieistniejacy?vid=MOCK:MOCK")
+check_status "GET /pnxs/L nieznany rekord -> 200 (nie 404)" 200 "$code"
+
 echo
 echo "=== Podsumowanie: $PASS PASS, $FAIL FAIL ==="
 [ "$FAIL" -eq 0 ]

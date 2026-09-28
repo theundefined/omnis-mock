@@ -57,7 +57,7 @@ na zachowanie API.
 | `date` | ✅ | ✅ | ✅ | ✅ | |
 | `isbn` | ✅ | ✅ | ✅ | ✅ | |
 | `edition` | ✅ | ❌ (czyta `display.edition`) | ❌ | ✅ | realistyczna dekoracja, real Primo duplikuje edition w obu miejscach |
-| `seriestitle` | ✅ | ✅ (`series`) | ❌ | ✅ | |
+| `seriestitle` | ✅ | ✅ (`series`) | ✅ (od v0.6.1: „Seria: …”, `q=series`, sortowanie po tomie) | ✅ | prawdziwy format „Nazwa / Odpowiedzialność ; tom”, np. `"Dzieła wszystkie / Adam Mickiewicz ; [t. 4]"`; pusta lista dla dzieł bez serii (SPEC.md REQ-G6) |
 | `aulast`, `aufirst`, `auinit`, `addau`, `cop`, `format`, `genre`, `ristype` | ✅ | ❌ | ❌ | ✅ | tanie, realistyczne, zero ryzyka |
 | `abstract`, `contributorfull`, `originatingSystemIDSubject`, `originatingSystemIDContributor`, `oclcid` | ✅ | ❌ | ❌ | ❌ | wewnętrzne identyfikatory źródłowego systemu / długi tekst — zero konsumentów, dla fikcyjnych rekordów czysty wymysł |
 
@@ -115,6 +115,18 @@ na zachowanie API.
 Mimo ścieżki `priv` endpoint **nie wymaga tokena** (SPEC.md REQ-G2). Realne Primo odpowiada tak samo bez
 nagłówka `Authorization`, z tokenem gościa i z tokenem z logowania (sprawdzone na 8 tenantach), a mock
 całkowicie ignoruje ten nagłówek.
+
+## `GET /primaws/rest/pub/pnxs/L/{recordId}` (SPEC.md REQ-G6)
+
+| Pole | Realny Primo | `omnis-py` | `omnis-mobile` | W mocku | Uwagi |
+|---|---|---|---|---|---|
+| `pnx` | ✅ | ✅ (`get_record_details`: `display.*`, `addata.isbn`) | ✅ (`addata.seriestitle`, `addata.au` wypożyczeń) | ✅ | ten sam `pnx` co w wynikach wyszukiwania |
+| `delivery.holding[]` | ✅ | ❌ | ✅ (adres filii wypożyczenia po `mainLocation`) | ✅ | ten sam holding co w REQ-17 |
+| `beaconO22`, `context`, `@id`, `adaptor`, `enrichment`, reszta koperty `delivery` | ✅ | ❌ | ❌ | ❌ | jak w `delivery` wyżej — zero konsumentów |
+
+Dla nieznanego rekordu prawdziwe Primo zwraca `200` z pustą kopertą wyszukiwania (`info`/`facets`/`docs`),
+bez `pnx`, i mock robi to samo. Dla identyfikatora w nieprawidłowym formacie (np. nie-numerycznego)
+prawdziwe Primo zwraca `400`, ale mock tego nie odwzorowuje, bo wszystkie jego mmsid są nie-numeryczne.
 
 ## `GET /primaws/rest/pub/institution/{institution}/guestJwt` (SPEC.md REQ-G1)
 

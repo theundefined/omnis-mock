@@ -110,6 +110,25 @@ def _library_code_from_location(main_location: str) -> str:
     return f"FD{number}"
 
 
+# Adres filii — jeden na filię, ten sam co w `_EDITIONS_A/B/C` wyżej (od REQ-G6 rekord `pnxs/L/alma{mmsid}`
+# pokazuje adres filii wypożyczenia w omnis-mobile, więc rozjazd byłby widoczny).
+_BRANCH_ADDRESS: dict[str, str] = {
+    "Filia Demo 1": "ul. Testowa 1",
+    "Filia Demo 2": "ul. Próbna 2",
+    "Filia Demo 3": "ul. Demowa 3",
+}
+
+# SPEC.md REQ-G6: seria (`addata.seriestitle`) dla dzieł z wypożyczeń demo, w prawdziwym formacie Primo —
+# dwa tomy tej samej serii z RÓŻNYM zapisem tomu/odpowiedzialności (omnis-mobile tnie nazwę serii na
+# pierwszym `;` i ` / `, a numer tomu bierze z pierwszej liczby po `;`). Oba to wypożyczenia konta demo, więc
+# "Seria: …" przy wypożyczeniu (omnis-mobile v0.6.2, rekord z `pnxs/L/alma{mmsid}`) prowadzi do obu tomów.
+# Pozostałe wypożyczenia celowo bez serii.
+_LOAN_SERIES: dict[str, str] = {
+    "loan-001": "Dzieła wszystkie / Adam Mickiewicz ; [t. 4]",
+    "loan-004": "Dzieła wszystkie ;  3",
+}
+
+
 def _works_from_loans() -> list[dict[str, Any]]:
     """Generuje wpisy katalogu wprost z `data._LOAN_TEMPLATES` (statyczny szablon, NIE
     `data.get_demo_loans()`/`data.renew_demo_loan()` — patrz docstring modułu), po jednym dziele/edycji na
@@ -127,7 +146,7 @@ def _works_from_loans() -> list[dict[str, Any]]:
                 "author": tmpl["author"],
                 "genres": ["Literatura polska", "Klasyka"],
                 "subjects": ["Historia", "Obyczaje"],
-                "series": None,
+                "series": _LOAN_SERIES.get(tmpl["loanid"]),
                 "language": "pol",
                 "publisher": "Wydawnictwo Demo",
                 "place": "Warszawa",
@@ -141,7 +160,7 @@ def _works_from_loans() -> list[dict[str, Any]]:
                         "holding": {
                             "main_location": tmpl["mainlocationname"],
                             "library_code": library_code,
-                            "sub_location": f"ul. Wypożyczeń {library_code[-1]}",
+                            "sub_location": _BRANCH_ADDRESS[tmpl["mainlocationname"]],
                             "sub_location_code": f"{library_code}dz",
                             "availability_status": "unavailable",
                             "hold_id": f"MOCK-HOLD-{tmpl['loanid'].upper()}",
@@ -338,11 +357,16 @@ def _normalize(text: str) -> str:
 
 def _haystack(work: dict[str, Any], field: str) -> str:
     """Tekst, względem którego dopasowujemy zapytanie. `creator` — TYLKO autor (w obu formach: naturalnej i
-    "Nazwisko, Imię"), bez tytułu (REQ-G5); `any` i nieznane pola — tytuł + autor (REQ-15)."""
+    "Nazwisko, Imię"), bez tytułu (REQ-G5); `series` — TYLKO seria (REQ-G6); `any` i nieznane pola —
+    tytuł + autor (REQ-15)."""
     author = work["author"]
     authors = f"{author} {_inverted_author(author)}"
     if field == "creator":
         return _normalize(authors)
+    if field == "series":
+        # REQ-G6: CAŁY `addata.seriestitle` (z tomem i odpowiedzialnością, jak w prawdziwym Primo —
+        # tam `series,contains,Rowling` trafia "Harry Potter / J. K. Rowling ; 2"), nie tytuł/autor.
+        return _normalize(work["series"] or "")
     return _normalize(f"{work['title']} {authors}")
 
 
@@ -400,6 +424,20 @@ def delivery(alma_ids: list[str]) -> list[dict[str, Any]]:
                     }
                 )
     return results
+
+
+def record(record_id: str) -> Optional[dict[str, Any]]:
+    """SPEC.md REQ-G6: pełny rekord dla `GET /primaws/rest/pub/pnxs/L/{record_id}` — `pnx` (ten sam co w
+    wynikach wyszukiwania, z `addata.au`/`seriestitle`) + `delivery.holding` (jak REQ-17). `record_id` to
+    alma-id (`alma<mmsid>`); nieznany -> `None` (main.py zwraca wtedy pustą kopertę wyszukiwania, jak
+    prawdziwe Primo)."""
+    if not record_id.startswith("alma"):
+        return None
+    pair = _MMSID_TO_WORK_EDITION.get(record_id[len("alma") :])
+    if pair is None:
+        return None
+    work, edition = pair
+    return {"pnx": _build_pnx(work, edition), "delivery": {"holding": [_build_holding(edition)]}}
 
 
 def physical_service_id(bare_mmsid: str) -> Optional[str]:
