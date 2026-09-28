@@ -108,3 +108,206 @@ specyfikacji — odnotowuję to jako obserwację, nie FAIL.
 
 - [x] **PASS** — gotowe do Fazy 4 (devops/deploy)
 - [ ] **FAIL** — lista blokujących REQ do zwrotu developerowi: _(brak — wszystkie REQ-1..REQ-14 PASS)_
+
+---
+
+# Dodatek: 2026-09-28 — REQ-G1..REQ-G5 (anonimowe wyszukiwanie tokenem gościa + wyszukiwanie po autorze)
+
+Weryfikacja niezależna, zgodnie z zasadą QA z góry tego dokumentu: werdykt PASS/FAIL per REQ, niezależny od
+zielonego `pytest`. Zmiany niezacommitowane w momencie weryfikacji (`git status`/`git diff`). Źródła prawdy
+użyte: `omnis-mobile/docs/omnis-mock-guest-search-spec.md` (oryginalne zlecenie), `docs/SPEC.md` (sekcja
+"Anonimowe wyszukiwanie...", endpoint 10, zmieniona sekcja 9, "Dane katalogu"), `docs/DEV_NOTES.md`
+(sekcja REQ-G1..REQ-G5).
+
+## Wynik `pytest -v`
+
+Uruchomione z `.venv/bin/pytest -v` po `.venv/bin/python -m pip install -e ".[dev]"`:
+
+```
+34 passed in 0.79s
+```
+
+Wszystkie 6 testów `tests/test_contract.py` (kontrakt QA, NIE zmieniany w tej sesji) nadal PASS —
+niezmienione. `tests/test_search_contract.py` (7 testów, jedna asercja zmieniona: `result.author ==
+"Nibylska, Karolina"` zamiast `"Karolina Nibylska"`, konsekwencja zmiany formatu `addata.au` — zgodne z
+opisanym w DEV_NOTES.md powodem, nie osłabienie testu) PASS. Nowy `tests/test_guest_search.py` (17 testów)
+PASS.
+
+`.venv/bin/python -m ruff check src tests` → `All checks passed!`. `.venv/bin/black --check src tests` →
+`10 files would be left unchanged.` Oba czyste.
+
+## Scenariusz akceptacyjny ze zlecenia (kroki 1–6), lokalny uvicorn (port 8766)
+
+`BASE_URL=http://localhost:8766 scripts/curl/run_all.sh` → **28 PASS, 0 FAIL** (włącznie z 14 sprawdzeniami
+Layer 1/Layer 2 sprzed tej sesji — bez regresji). Skrypty `15_guest_jwt.sh`..`18_guest_myaccount_denied.sh`
+uruchomione osobno, wyniki dosłowne poniżej.
+
+### Krok 1–4 (pipeline `pnxs`→`delivery`→`getPhysicalService`→`ILSServices/holdings` tokenem gościa)
+
+```
+1. GET /primaws/rest/pub/pnxs?q=any,contains,Nibylandii&scope=MyInstitution&... (Authorization: Bearer <guest>)
+   -> almaMOCK-SEARCH-A1 | Cienie Nibylandii | Nibylska, Karolina
+
+2. POST /primaws/rest/pub/delivery ["almaMOCK-SEARCH-A2"]
+   -> availabilityStatus: unavailable
+   -> holKey: HoldingResultKey [mid=MOCK-HOLD-A2, libraryId=MOCK-LIB-FD2, locationCode=FD2dz, callNumber=null]
+
+3. GET /primaws/rest/pub/getPhysicalService/MOCK-SEARCH-A2
+   -> physicalServiceId: PS-MOCK-SEARCH-A2
+
+4. POST /primaws/rest/priv/ILSServices/holdings/PS-MOCK-SEARCH-A2 (Authorization: Bearer <guest>, holding z kroku 2)
+   -> HTTP 200
+   -> {"data":{"itemInfo":{"locations":[{"items":[{"itemstatusname":"Wypożyczony - termin zwrotu przekroczony od 23/09/2026"}]}]}}}
+```
+
+Zgodne dosłownie ze scenariuszem ze zlecenia.
+
+### Krok 5 (wyszukiwanie po autorze, `q=creator,contains,...`)
+
+```
+addata.au z wyniku 'Nibylandii': Nibylska, Karolina
+
+q=creator,contains,Nibylska, Karolina    -> ['Cienie Nibylandii']
+q=creator,contains,Cienie                -> []
+q=any,contains,Cienie                    -> ['Cienie Nibylandii']
+q=creator,contains,Mickiewicz, Adam      -> ['Pan Tadeusz', 'Dziady']
+```
+
+Wartość z przecinkiem trafia do tego samego rekordu (dowód, że `q` dzieli się tylko na dwóch pierwszych
+przecinkach), pole `creator` poprawnie NIE dopasowuje słowa z tytułu, `any` dalej dopasowuje tytuł+autora,
+autor z dwoma dziełami zwraca oba.
+
+### Krok 6 (`myaccount/loans` tokenem gościa)
+
+```
+GET /primaws/rest/priv/myaccount/loans (Authorization: Bearer <guest>)
+-> HTTP 200
+-> {"beaconO22":"0","status":"failed","reply-code":"0002","reply-text":"The patron ID is invalid","data":null}
+```
+
+Zgodne dosłownie z REQ-G3 — **200, nie 401**. Sprawdzono też `counters` i `renew_loans` tokenem gościa —
+identyczne body, 200, w każdym przypadku.
+
+## Ręczne testy edge case poza `tests/test_guest_search.py` i skryptami curl
+
+Wszystkie na lokalnym uvicornie (port 8766), niezależnie od skryptów dostarczonych przez developera:
+
+- **`Content-Type` `guestJwt`**: nagłówek odpowiedzi dokładnie `content-type: application/json;charset=UTF-8`
+  (sprawdzone `curl -i`), zgodnie z REQ-G1 — nie `application/json` bez charsetu, co dałby domyślny
+  `JSONResponse`.
+- **Non-ASCII w `viewId`/`institution`**: `institution=Łódź` (URL-encoded), `viewId=Wid√ok:Zażółć` →
+  token wydany, payload zdekodowany standardowym `base64.b64decode` daje poprawny JSON z `\uXXXX`
+  escape'ami, `json.loads` → `{"institution": "Łódź", "viewId": "Wid√ok:Zażółć", ...}` — payload jest
+  czystym ASCII i bezstratnie dekodowalny, zgodnie z wymogiem REQ-G1/REQ-4.
+- **Kodowanie base64 tokena gościa**: zdekodowano wszystkie 3 segmenty (`header`, `payload`, `signature`)
+  standardowym `base64.b64decode` z doklejonym paddingiem — wszystkie 3 dekodują się bez błędu do sensownego
+  JSON/bajtów, zgodnie ze standardowym (nie urlsafe) alfabetem z REQ-4.
+- **`language` domyślne**: brak `lang` w query → payload ma `"language": "en"`, zgodnie z próbką
+  prawdziwego tokena w zleceniu.
+- **Token gościa / token z logowania / nieznany token / brak nagłówka na 4 endpointach wyszukiwarki**
+  (`pnxs`, `delivery`, `getPhysicalService`, `ILSServices/holdings`): wszystkie kombinacje → `200` —
+  nagłówek `Authorization` jest w pełni ignorowany, zgodnie z REQ-G2 (włącznie z opcjonalnym punktem
+  zlecenia "działa też bez nagłówka wcale", świadomie wdrożonym).
+- **Token z logowania na `myaccount/*`** (kontrolne, nie REQ-G): `GET /loans` z tokenem z logowania →
+  `200` z realnymi 4 loanami — potwierdza, że `_require_patron` nie zepsuł ścieżki z prawdziwym tokenem.
+- **`Authorization: authorization: bearer <guest_token>`** (małe litery `bearer`) na `myaccount/loans` →
+  `401` (nie 200 z `"failed"`) — token z małym `bearer` nie jest rozpoznawany jako `Bearer <token>` wcale
+  (zgodne z istniejącą ścisłością z Layer 1 QA, `is_valid_token`/`token_kind` sprawdzają `startswith("Bearer ")`
+  dosłownie), więc trafia w gałąź "nieznany token" → 401, zgodnie z REQ-G3 ("Brak tokena albo nieznany
+  token → 401 jak dotąd").
+- **`renew_loans` tokenem gościa nie mutuje stanu**: potwierdzone też niezależnie od
+  `test_guest_renew_does_not_mutate_loans` — `_require_patron` zwraca odpowiedź "failed" PRZED
+  `data.renew_demo_loan()`, więc funkcja mutująca nie jest wołana. Kod widziany bezpośrednio w `main.py`
+  (`renew_loans`: `if (denied := _require_patron(request)) is not None: return denied` — wcześniej niż
+  `body = await request.json()` / `data.renew_demo_loan(loan_id)`).
+- **`q` z wieloma przecinkami**: `q=creator,contains,Nibylska, Karolina, extra, stuff` → `[]` (wartość po
+  drugim przecinku to `"Nibylska, Karolina, extra, stuff"`, nie jest substringiem znormalizowanego autora)
+  — zachowanie zgodne z opisanym "dzieli TYLKO na dwóch pierwszych przecinkach", nie błąd.
+- **`q` bez prefiksu pola** (`q=Nibylandii`, bez `,contains,`): traktowane jako `("any", "Nibylandii")` →
+  1 wynik. `q` z jednym przecinkiem (`q=any,Nibylandii`) → `[]` (poprawnie, bo `_parse_q` wymaga DWÓCH
+  przecinków, żeby rozpoznać `pole,operator,wartość`; z jednym przecinkiem cała wartość `"any,Nibylandii"`
+  jest traktowana jako fraza `any`, więc dopasowanie substring nie trafia — zgodne z kodem, nie błąd).
+- **REQ-14 nadal trzyma**: `q=any,contains,cokolwiek-xyz-nonsense` → `{"docs": []}`.
+- **Nieznane pole w `q`** (`q=title,contains,Cienie`): zachowuje się jak `any` (dopasowuje tytuł) —
+  zgodne z SPEC.md ("nieznane pole — zachowanie dowolne, np. jak `any`").
+- **`scope=` (pusty string)** → `200` (traktowany jak brak parametru, zgodnie z decyzją opisaną w
+  DEV_NOTES.md — nie jest to w SPEC.md dosłownie, ale nie jest odstępstwem, bo SPEC.md nie definiuje
+  zachowania dla pustego stringa, tylko dla "brak parametru" i "nieznana wartość").
+- **`400` dla nieznanego `scope`**: `curl -i` → `HTTP/1.1 400 Bad Request`, `content-length: 0` — body
+  faktycznie puste (nie `{"detail": ...}` jak dałby domyślny `HTTPException`), zgodnie z "wierność"
+  zleconą opcjonalnie i zaimplementowaną.
+- **Wielokrotne `/discovery/search`**: 3 kolejne wywołania → `200 200 200`, bez efektów pobocznych.
+- **Kompatybilność wsteczna**: `scope=MyInstitution2` (omnis-py, starsze omnis-mobile) → `200`, tak jak
+  `scope=MyInstitution`; `q=any,contains,...` (format omnis-py) działa niezmiennie.
+- **Wyszukiwanie po autorze case-insensitive, z polskimi znakami diakrytycznymi**: `creator,contains,prus`,
+  `creator,contains,BOLESŁAW PRUS`, `creator,contains,Sienkiewicz, Henryk` — wszystkie trafiają poprawnie
+  (`Lalka`, `Lalka`, `Quo Vadis`).
+
+## Weryfikacja zgodności z klientami (omnis-py, omnis-mobile) — punkt 4 zlecenia QA
+
+- **`omnis-py`** (`src/omnis/client.py`): `_addata_first(doc, "au")` czyta `addata.au` jako zwykły string
+  bez założeń o formacie (brak parsowania na `aulast`/`aufirst` po stronie klienta — `grep` potwierdza brak
+  użycia tych pól w `omnis-py` w ogóle). Zmiana formatu `au` z `"Karolina Nibylska"` na `"Nibylska,
+  Karolina"` nie psuje niczego strukturalnie — `SearchResult.author` po prostu zmienia treść (stąd zmieniona
+  asercja w `tests/test_search_contract.py`, prawidłowo, nie osłabienie testu).
+- **`omnis-mobile`** (Kotlin): `Pnx.addataFirst("au")` (`Models.kt`) analogicznie — string bez
+  transformacji. `SearchScreen.kt` (`onAuthorClick(author)`, linia ok. 573) przekazuje `result.author`
+  (czyli `addataFirst("au")`) **1:1, bez trymowania/dzielenia po przecinku**, do
+  `searchFor(query, SearchField.AUTHOR)` → `viewModel.runSearch` → `OmnisRepository.searchBooks(field=
+  SearchField.AUTHOR)` → `"q" to "${field.primoField},contains,$q"` = `"creator,contains,Nibylska,
+  Karolina"` (`OmnisRepository.kt` ~L585). Zweryfikowano bezpośrednio w kodzie Kotlin (nie zgadywane): to,
+  co aplikacja faktycznie wysyła po kliknięciu autora, **dokładnie trafia** w kontrakt `_parse_q`
+  (podział tylko na dwóch pierwszych przecinkach) zaimplementowany w mocku. Brak transformacji (bez
+  cudzysłowów, bez `$$Q`, bez podziału na `;`) — sprawdzone czytając `SearchScreen.kt` L555–580 i
+  `OmnisRepository.kt` L540–600.
+- **`scope`**: `omnis-mobile` (`OmnisRepository.kt` L594) wysyła `"scope" to "MyInstitution"` (nowa
+  wersja); `omnis-py` (`client.py` L466) wysyła `"scope": "MyInstitution2"`. Oba zaakceptowane przez mock
+  (`_KNOWN_SCOPES = {"MyInstitution", "MyInstitution2"}`) — zgodne.
+- **`guestJwt`**: `omnis-mobile`'s `OmnisApi.getGuestJwt` (Retrofit) wysyła `institution` jako `@Path`,
+  `viewId`/`targetUrl`/`isGuest`/`lang` jako `@Query` — dokładnie sygnatura, którą obsługuje
+  `guest_jwt()` w `main.py`. Body odbierane jako `ResponseBody` (nie model), `.string()?.trim()?.trim('"')`
+  — zgodne z tym, że mock zwraca literał stringu JSON, nie obiekt.
+- **Obserwacja poboczna (nie blokuje, informacyjna, nie część REQ-G1..G5)**: `CLAUDE.md` (część niezmieniona
+  w tym diffie) zawiera zdanie "`omnis-mobile`'s `data class Holding` (Kotlin) dziś **nie ma pola
+  `holKey`**". Sprawdzono bezpośrednio w kodzie (`omnis-mobile/app/src/main/kotlin/.../model/Models.kt`,
+  `data class Holding`) — pole `holKey: String? = null` **już istnieje** i jest przekazywane 1:1 przez
+  `HoldingsStatusRequest.locations: List<Holding>`. To zdanie w `CLAUDE.md` jest więc nieaktualne (dobra
+  wiadomość: krok 4 scenariusza akceptacyjnego rozwiązuje się nie tylko dla `omnis-py`, ale też dla
+  prawdziwej aplikacji `omnis-mobile`). Nie jest to regresja wprowadzona w tej sesji (plik nie był
+  edytowany w tym miejscu) — zgłaszam jako drobną poprawkę do wprowadzenia przy najbliższej okazji, nie
+  jako FAIL.
+
+## REQ-G1..REQ-G5 — REQ po REQ
+
+| REQ | Opis (skrót) | Werdykt | Notatka |
+|---|---|---|---|
+| REQ-G1 | `GET guestJwt` → `200`, string JSON w cudzysłowach, `Content-Type` z charsetem, token 3-segmentowy z payloadem GUEST; brak `viewId` → `400` puste body | PASS | Zweryfikowano dosłowny nagłówek `content-type: application/json;charset=UTF-8`, payload z non-ASCII input (`Łódź`) poprawnie ASCII-escapowany i dekodowalny standardowym `b64decode`. `language` domyślnie `"en"` przy braku `lang`. |
+| REQ-G2 | `pnxs`/`delivery`/`getPhysicalService`/`ILSServices/holdings` działają z tokenem gościa, tokenem z logowania, nieznanym tokenem i bez nagłówka | PASS | Wszystkie 4×4 kombinacje sprawdzone ręcznie → `200`. Pułapka `holKey` (REQ-18b) nadal działa z tokenem gościa (potwierdzone przez `test_full_search_pipeline_with_guest_token_via_real_client` — asercja na `due_date`, nie tylko `len(results)`). |
+| REQ-G3 | Token gościa na `myaccount/loans`/`counters`/`renew_loans` → `200` z dokładnym body `"status":"failed","reply-code":"0002"`, NIE 401; brak/nieznany token → 401 bez zmian; `renew_loans` nie mutuje stanu | PASS | Body zweryfikowane bajt-po-bajcie curlem, zgodne 1:1 ze zleceniem. `renew_loans` guest-tokenem potwierdzone jako no-op na `duedate` (zarówno testem jak i przez czytanie kodu — `_require_patron` zwraca wcześniej niż `renew_demo_loan()`). Lowercase `bearer` poprawnie wpada w gałąź 401 (nieznany token), nie w gałąź "guest". |
+| REQ-G4 | `scope` akceptuje `MyInstitution`/`MyInstitution2`/brak, nieznany → `400` z pustym body; `tab` ignorowany; `delivery` nie waliduje `scope` | PASS | `400` ma `content-length: 0` (nie `{"detail":...}`), zgodnie z "wierność". `scope=` (pusty string) → `200`, decyzja z DEV_NOTES.md, nie odstępstwo od SPEC.md (SPEC.md nie definiuje tego przypadku dosłownie). |
+| REQ-G5 | `q` parsowane jako `pole,operator,wartość` z podziałem tylko na 2 pierwszych przecinkach; `creator` dopasowuje tylko autora; `any`/nieznane pole — tytuł+autor; dopasowanie w obu zapisach autora | PASS | Zweryfikowano wartość z przecinkiem (`"Nibylska, Karolina"`) end-to-end, `creator` nie łapie słowa z tytułu, autor z dwoma dziełami zwraca oba, case-insensitive z polskimi znakami diakrytycznymi. Potwierdzone też, że `omnis-mobile` faktycznie wysyła `au` 1:1 z przecinkiem (czytanie kodu Kotlin) — nie tylko teoretyczna zgodność kształtu. |
+
+Dodatkowo zweryfikowano brak regresji na REQ-14 (dowolne nietrafiające zapytanie → `{"docs": []}`) oraz na
+REQ-15/16/17/18/18b (pojedyncze zapytanie, `qInclude`, `delivery`, `getPhysicalService`, pułapka `holKey`)
+— wszystkie nadal PASS w `run_all.sh` (28/28) i `pytest`.
+
+## Znaleziska (żadne nie blokujące)
+
+| Znalezisko | Ważność |
+|---|---|
+| Zmieniona asercja w `tests/test_search_contract.py` (`author == "Nibylska, Karolina"`) | Informacyjne — konsekwencja zaakceptowanej zmiany formatu `au`, nie osłabienie testu. |
+| `q=title,contains,...` (nieznane pole) traktowane jak `any` | Zgodne z zezwoleniem w zleceniu ("zachowanie dowolne"). |
+| `scope` sprawdzany case-sensitive (`myinstitution` ≠ `MyInstitution`) | Informacyjne, SPEC.md nie wymaga inaczej. |
+| `bearer` małymi literami z tokenem gościa → `401`, nie gałąź "guest" | Zgodne z istniejącą ścisłością `startswith("Bearer ")` z Layer 1 (REQ-5), nie nowy defekt. |
+| Token z logowania + całkowicie pusty body na `renew_loans` → `500` (nieobsłużony `JSONDecodeError`) | Pre-istniejące, nieruszone w tej sesji (już odnotowane w PASS dla Layer 1 wyżej w tym pliku). Ścieżka z tokenem gościa nie dotyka tego kodu wcale — `_require_patron` odcina wcześniej. |
+| `userName`/`user` gościa budowane z `datetime.now()` (czas lokalny procesu), a `iat`/`exp` z `time.time()` (epoch UTC) | Kosmetyczne — brak wpływu na kontrakt, żaden klient nie parsuje `userName` jako daty. |
+| `CLAUDE.md` (fragment nieedytowany w tej sesji) twierdzi, że `omnis-mobile`'s `Holding` nie ma `holKey` — nieaktualne, pole już istnieje i jest przekazywane 1:1 | Informacyjne, drobna poprawka dokumentacji do wprowadzenia przy okazji — nie dotyczy zmian z tej sesji i nie blokuje. |
+| Rejestr tokenów gościa (`_guest_tokens`) to kolejny nieograniczony set in-memory, tej samej klasy ryzyka jak `_valid_tokens` (już odnotowane dla Fazy 4/deploy w sekcji Layer 1 wyżej) | Informacyjne, nie nowa klasa ryzyka. |
+
+## Werdykt końcowy (REQ-G1..REQ-G5)
+
+- [x] **PASS** — REQ-G1..REQ-G5 zgodne ze zleceniem `omnis-mobile/docs/omnis-mock-guest-search-spec.md` i
+      `docs/SPEC.md`; brak regresji na REQ-1..REQ-18b (Layer 1/Layer 2 bez zmian zachowania, `pytest`
+      34/34, `run_all.sh` 28/28). Ten dodatek NIE zmienia wcześniejszego werdyktu PASS dla Layer 1
+      (Faza 4/deploy) — jest z nim zgodny i go rozszerza.
+- [ ] **FAIL** — lista blokujących REQ do zwrotu developerowi: _(brak)_

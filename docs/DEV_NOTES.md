@@ -40,3 +40,53 @@
 ## Faza 3 (Layer 2, jeśli realizowana)
 
 _(nie realizowana w tej sesji)_
+
+## REQ-G1..REQ-G5 — anonimowe wyszukiwanie (token gościa) + wyszukiwanie po autorze
+
+- Data: 2026-09-28
+- Źródło: zlecenie `omnis-mobile/docs/omnis-mock-guest-search-spec.md`, przeniesione do `docs/SPEC.md`
+  (sekcja „Anonimowe wyszukiwanie”, endpoint 10). Implementacja w sesji głównej, bez osobnego subagenta
+  `developer`.
+- Opcjonalne punkty zlecenia wdrożone po decyzji użytkownika:
+  - wyszukiwarka bez tokena, łącznie z `priv/ILSServices/holdings`, który ignoruje `Authorization`;
+  - nieznany `scope` → `400` z pustym body;
+  - format autora w katalogu „Nazwisko, Imię” w `au`/`addau`/`sort.author`/`contributor`.
+- Decyzje niejednoznaczne w zleceniu i jak zostały rozstrzygnięte:
+  - Pusty `scope=` jest traktowany jak brak parametru, a nie jako nieznany scope.
+  - `guestJwt` zwraca 400 tylko przy braku `viewId`. Brak `isGuest`/`lang`/`targetUrl` jest tolerowany.
+    `language` w payloadzie pochodzi z `lang`, a przy jego braku ma wartość `"en"`, jak w próbce
+    prawdziwego tokena.
+  - Wypożyczenia (`data.py`) zostają z autorem w kolejności naturalnej. Zlecenie mówiło tylko o
+    `addata.au`, a zmiana w wypożyczeniach nie byłaby nigdzie sprawdzalna.
+  - Dopasowanie `any`/`creator` normalizuje przecinki i białe znaki i patrzy na obie formy autora. Dzięki
+    temu „Weir, Andy” i „Weir Andy” dają to samo, tak jak w prawdziwym Primo, a REQ-14 („cokolwiek” →
+    pusto) nadal przechodzi.
+  - Rejestr tokenów gościa to osobny set in-memory, tak jak tokeny z logowania. Rośnie bez limitu między
+    restartami. Tak samo jest już dla tokenów z logowania, a dane demo są publiczne, więc nie jest to nowa
+    klasa ryzyka.
+- Zmieniona asercja w `tests/test_search_contract.py`: `result.author == "Nibylska, Karolina"`, jako
+  konsekwencja zmiany formatu `au`. `tests/test_contract.py` (kontrakt QA) nie był ruszany.
+- Wykonane testy: `pytest` 34/34 (w tym nowy `tests/test_guest_search.py`), `ruff`/`black` czyste,
+  `scripts/curl/run_all.sh` na lokalnym uvicornie 28/28 PASS, skrypty 15–18 uruchomione ręcznie.
+- **Weryfikacja na żywym Primo (2026-09-28)**: anonimowo, tokenem gościa, bez żadnych danych konta, na
+  Bibliotece Raczyńskich (`48OMNIS_BRP:BRACZ`) i Dolnośląskiej Bibliotece Publicznej
+  (`48OMNIS_WBP:48OMNIS_WBP`). Dla obu tenantów zgodne z mockiem:
+  - `guestJwt` bez parametrów → 400 z pustym body; z parametrami → 200,
+    `application/json;charset=UTF-8`, token w cudzysłowach, payload `anonymous-…`/`GUEST`/`displayName:
+    null`.
+  - `myaccount/loans`, `counters` i `renew_loans` tokenem gościa → 200 z dokładnie tym samym body
+    `"reply-code":"0002"`. Zachowanie `renew_loans`, w zleceniu nieprzetestowane, jest teraz potwierdzone.
+  - `pnxs`: `scope=MyInstitution` → 200, nieznany scope → 400 z pustym body. Działa bez tokena i z
+    nieznanym tokenem.
+  - `creator,contains,Prus, Bolesław` i `creator,contains,Prus Bolesław` dają ten sam wynik (262 w BRACZ,
+    151 w DBP), `au` ma format „Nazwisko, Imię”.
+  - `ILSServices/holdings` → termin zwrotu zarówno z tokenem gościa, jak i bez tokena.
+
+  Różnice między tenantami, które mock świadomie upraszcza:
+  - Bez `holKey` BRACZ zwraca pustą listę (REQ-18b), a DBP mimo to zwraca termin zwrotu. Mock odwzorowuje
+    BRACZ.
+  - `creator,contains,Lalka` → w BRACZ 0 wyników, w DBP 25 rekordów bez `au` (prawdopodobnie dopasowanie
+    po innym polu twórcy). Mock dopasowuje `creator` wyłącznie do autora.
+
+  Skrypt weryfikacyjny nie jest w repo, bo robi ruch do prawdziwych bibliotek. Jego odtworzenie to ~100
+  linii `httpx` według kroków ze scenariusza akceptacyjnego zlecenia.

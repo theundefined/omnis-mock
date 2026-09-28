@@ -67,8 +67,10 @@ silniej niż jakiekolwiek ręcznie pisane assercje. Ten plik jest kontraktem QA 
 
 ```
 src/omnis_mock/
-  main.py         FastAPI — routing; dokładny kształt JSON per endpoint w docs/SPEC.md (REQ-1..REQ-18b)
-  auth.py         fake JWT (3 segmenty, payload ASCII-only — REQ-4) + rejestr ważnych tokenów (in-memory)
+  main.py         FastAPI — routing; dokładny kształt JSON per endpoint w docs/SPEC.md (REQ-1..REQ-18b,
+                  REQ-G1..G5)
+  auth.py         fake JWT (3 segmenty, payload ASCII-only — REQ-4) + dwa rejestry tokenów (in-memory):
+                  z logowania i gościa (guestJwt, REQ-G1); token_kind() je rozróżnia
   data.py         fixture wypożyczeń demo-konta + stan po renew_loan (in-memory, resetowany co proces)
   search_data.py  fixture katalogu (3 fikcyjne dzieła + 4 wygenerowane z data._LOAN_TEMPLATES, ten sam
                   mmsid co odpowiedni loan, oznaczone jako unavailable) dla wyszukiwarki — bezstanowy,
@@ -80,7 +82,9 @@ Layer 1 (login/counters/loans/renew_loans, REQ-1..REQ-13b) i Layer 2 (wyszukiwar
 `pnxs`/`delivery`/`getPhysicalService`/`ILSServices/holdings`, REQ-14..REQ-18b, Faza 3 z `docs/PLAN.md`)
 są w pełni zaimplementowane. Layer 1 zweryfikowany niezależnie przez QA (`docs/QA_REPORT.md`: PASS) oraz
 wdrożony (`docs/DEPLOY_NOTES.md`); Layer 2 zweryfikowany `tests/test_search_contract.py` (analogiczny
-oracle do Layer 1 — prawdziwy `OmnisClient`). Pełna lista pól JSON per endpoint Layer 2 i uzasadnienie
+oracle do Layer 1 — prawdziwy `OmnisClient`). Anonimowe wyszukiwanie tokenem gościa i wyszukiwanie po
+autorze (REQ-G1..G5, zlecenie z `omnis-mobile/docs/omnis-mock-guest-search-spec.md`) —
+`tests/test_guest_search.py`. Pełna lista pól JSON per endpoint Layer 2 i uzasadnienie
 które pole jest zwracane przez realne Primo i kto (`omnis-py`/`omnis-mobile`) je faktycznie konsumuje:
 `docs/API_FIELDS.md`.
 
@@ -105,12 +109,23 @@ gitignored, nigdy nie commitować.
   jedyne "dekoracyjne" pole `holding` spośród ~16 pozostałych, które ma realny wpływ na zachowanie API.
   `omnis-py` przekazuje cały `holding` 1:1 z powrotem w kolejnym żądaniu, więc mock musi wygenerować
   `holKey` w REQ-17, żeby REQ-18b w ogóle mogło zadziałać (SPEC.md, `docs/API_FIELDS.md`).
+  **Zależy od tenanta** (sprawdzone na żywo 2026-09-28 tokenem gościa): w Raczyńskich (`48OMNIS_BRP`) bez
+  `holKey` dostajemy pustą listę, a w Dolnośląskiej Bibliotece Publicznej (`48OMNIS_WBP`) termin zwrotu
+  wraca i bez tego pola. Mock celowo odwzorowuje surowszy wariant, czyli Raczyńskich, żeby klient, który
+  gubi `holKey`, był wykryty.
+- Token gościa (`guestJwt`, REQ-G1) na `myaccount/*` zwraca **200** (nie 401!) z
+  `"status":"failed","reply-code":"0002"` (REQ-G3), dokładnie jak prawdziwe Primo. To pułapka tej samej
+  klasy co REQ-7/REQ-11: klient sprawdzający tylko kod HTTP uzna odmowę za sukces. Odwrotnie wyszukiwarka:
+  wszystkie 4 jej endpointy, łącznie z `priv/ILSServices/holdings`, w ogóle nie sprawdzają `Authorization`
+  (REQ-G2). Nie „naprawiaj” tego dodaniem auth, bo zepsułoby to wyszukiwanie w `omnis-mobile`.
+- `addata.au` w katalogu ma format „Nazwisko, Imię” (REQ-G5), a `omnis-mobile` wysyła go 1:1 jako
+  `q=creator,contains,Nibylska, Karolina`. `_parse_q` musi dzielić `q` tylko na DWÓCH pierwszych
+  przecinkach.
 - `omnis-mobile` ma w pełni podpiętą pod UI wyszukiwarkę katalogu (`SearchScreen`) — od Fazy 3 `/pnxs`
   zwraca realne (fikcyjne) wyniki dla trafiających zapytań, `{"docs": []}` tylko gdy nic nie pasuje
-  (REQ-14). Uwaga: `omnis-mobile`'s `data class Holding` (Kotlin) dziś **nie ma pola `holKey`** — dopóki
-  to nie zostanie dodane po stronie `omnis-mobile` (rekomendacja w
-  `omnis-mobile/docs/api-verification-response.md`, nie ruszona przez ten mock), termin zwrotu w apce
-  mobilnej się nie rozwiąże, mimo że działa poprawnie dla `omnis-py`.
+  (REQ-14). `omnis-mobile`'s `data class Holding` (Kotlin, `Models.kt`) ma już pole `holKey` i
+  przekazuje cały holding 1:1 w `HoldingsStatusRequest.locations` (`OmnisRepository.kt`, sprawdzone
+  2026-09-28), więc termin zwrotu rozwiązuje się w apce mobilnej tak samo jak w `omnis-py`.
 - Render (darmowy tier) usypia po bezczynności — sprawdź timeouty klienta PRZED poleganiem na tym jako
   koncie testowym dla Google Play (`docs/PLAN.md`, Faza 4) — inaczej mock istnieje, ale recenzent i tak
   dostanie błąd logowania przy pierwszej próbie.

@@ -1,19 +1,23 @@
-"""Punkt wejścia FastAPI. Endpointy i dokładny kształt JSON: docs/SPEC.md (REQ-1..REQ-18b).
+"""Punkt wejścia FastAPI. Endpointy i dokładny kształt JSON: docs/SPEC.md (REQ-1..REQ-18b, REQ-G1..G5).
 
 Layer 1 (login/counters/loans/renew) zaimplementowane w Fazie 1 (docs/PLAN.md), korzysta z
 `auth.py`/`data.py`. Layer 2 (wyszukiwarka katalogu — `pnxs`/`delivery`/`getPhysicalService`/
 `ILSServices/holdings`) zaimplementowane w Fazie 3, korzysta z `search_data.py`; pełna lista pól per
 endpoint i uzasadnienie ich włączenia/wykluczenia względem realnego Primo: docs/API_FIELDS.md.
+Anonimowe wyszukiwanie (token gościa z `guestJwt`, REQ-G1..G5) — wyszukiwarka nie wymaga żadnego tokena,
+`myaccount/*` z tokenem gościa zwraca 200 z `"status": "failed"` (REQ-G3).
 
 `/`, `/robots.txt` — strona statusu dla ludzi/botów, nie część kontraktu Primo (SPEC.md, sekcja
 "Endpointy pomocnicze").
 """
 
+import json
 import os
 import time
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from omnis_mock import __version__, auth, data, search_data
 
@@ -134,12 +138,38 @@ async def discovery_search() -> Response:
     return Response(status_code=200)
 
 
-@app.get("/primaws/rest/pub/pnxs")
-async def pnxs_search(request: Request) -> dict:
+@app.get("/primaws/rest/pub/institution/{institution}/guestJwt")
+async def guest_jwt(institution: str, request: Request) -> Response:
+    """SPEC.md REQ-G1 — token gościa do anonimowego wyszukiwania. Body to LITERAŁ stringu JSON (token w
+    cudzysłowach), nie obiekt `{"jwtData": ...}` jak w `suprimaLogin`; Content-Type z jawnym charsetem
+    (`JSONResponse` dałby samo `application/json`). Brak `viewId` -> 400 z pustym body.
+    """
+    view_id = request.query_params.get("viewId")
+    if not view_id:
+        return Response(status_code=400)
+    language = request.query_params.get("lang") or "en"
+    token = auth.issue_guest_token(institution, view_id, language)
+    auth.register_guest_token(token)
+    return Response(content=json.dumps(token), media_type="application/json;charset=UTF-8")
+
+
+# REQ-G4: `MyInstitution` wysyła omnis-mobile od wersji z anonimowym wyszukiwaniem, `MyInstitution2`
+# omnis-py i starsze omnis-mobile — oba muszą działać.
+_KNOWN_SCOPES = {"MyInstitution", "MyInstitution2"}
+
+
+@app.get("/primaws/rest/pub/pnxs", response_model=None)
+async def pnxs_search(request: Request) -> dict | Response:
     """SPEC.md REQ-14/REQ-15/REQ-16 — wyszukiwarka katalogu (Layer 2). `qInclude` -> group expansion
     (wszystkie wydania danego `frbrgroupid`), inaczej top-level search po `q` (paginowany `offset`/`limit`).
     Zapytanie niczego nie trafiające zwraca `{"docs": []}` — dokładnie zachowanie REQ-14 sprzed Layer 2.
+    Nie wymaga tokena (REQ-G2) — działa tak samo bez nagłówka, z tokenem gościa i z tokenem z logowania.
     """
+    # REQ-G4: nieznany `scope` -> 400 z PUSTYM body (tak odpowiada Primo; HTTPException dałby
+    # `{"detail": ...}`). Brak parametru albo pusty -> jak dotąd.
+    scope = request.query_params.get("scope", "")
+    if scope and scope not in _KNOWN_SCOPES:
+        return Response(status_code=400)
     q = request.query_params.get("q", "")
     q_include = request.query_params.get("qInclude", "")
     offset = int(request.query_params.get("offset") or "0")
@@ -192,29 +222,50 @@ async def suprima_login(request: Request) -> dict:
     return {"jwtData": token}
 
 
-def _require_valid_token(request: Request) -> None:
-    if not auth.is_valid_token(request.headers.get("Authorization")):
-        raise HTTPException(status_code=401, detail="Not authenticated")
+# SPEC.md REQ-G3 — dokładne body prawdziwego Primo dla tokena gościa na `myaccount/*`. Status 200, NIE 401.
+_GUEST_PATRON_INVALID = {
+    "beaconO22": "0",
+    "status": "failed",
+    "reply-code": "0002",
+    "reply-text": "The patron ID is invalid",
+    "data": None,
+}
 
 
-@app.get("/primaws/rest/priv/myaccount/counters")
-async def counters(request: Request) -> dict:
+def _require_patron(request: Request) -> Optional[JSONResponse]:
+    """Autoryzacja endpointów `myaccount/*`: token z logowania -> `None` (obsłuż normalnie); token gościa ->
+    gotowa odpowiedź 200 "failed" do zwrócenia (REQ-G3, pułapka: klient sprawdzający tylko kod HTTP uzna ją
+    za sukces); brak/nieznany token -> 401 (REQ-5/REQ-8/REQ-12)."""
+    kind = auth.token_kind(request.headers.get("Authorization"))
+    if kind == "login":
+        return None
+    if kind == "guest":
+        return JSONResponse(_GUEST_PATRON_INVALID)
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+@app.get("/primaws/rest/priv/myaccount/counters", response_model=None)
+async def counters(request: Request) -> dict | JSONResponse:
     """SPEC.md REQ-5, REQ-6, REQ-7 — UWAGA REQ-7: format kwoty z KROPKĄ ("0.00"), inny niż w /fines."""
-    _require_valid_token(request)
+    if (denied := _require_patron(request)) is not None:
+        return denied
     return {"data": {"listofactions": {"action": data.get_demo_counters()}}}
 
 
-@app.get("/primaws/rest/priv/myaccount/loans")
-async def loans(request: Request) -> dict:
+@app.get("/primaws/rest/priv/myaccount/loans", response_model=None)
+async def loans(request: Request) -> dict | JSONResponse:
     """SPEC.md REQ-8, REQ-9, REQ-10, REQ-11 — UWAGA REQ-11: showmore nie może zawiesić klienta w pętli."""
-    _require_valid_token(request)
+    if (denied := _require_patron(request)) is not None:
+        return denied
     return {"data": {"loans": {"loan": data.get_demo_loans(), "showmore": []}}}
 
 
-@app.post("/primaws/rest/priv/myaccount/renew_loans")
-async def renew_loans(request: Request) -> dict:
-    """SPEC.md REQ-12, REQ-13, REQ-13b — nieznany id to no-op 200, nie błąd."""
-    _require_valid_token(request)
+@app.post("/primaws/rest/priv/myaccount/renew_loans", response_model=None)
+async def renew_loans(request: Request) -> dict | JSONResponse:
+    """SPEC.md REQ-12, REQ-13, REQ-13b — nieznany id to no-op 200, nie błąd. Token gościa -> REQ-G3, bez
+    mutacji stanu."""
+    if (denied := _require_patron(request)) is not None:
+        return denied
     body = await request.json()
     loan_id = str(body.get("id", ""))
     renewed = data.renew_demo_loan(loan_id)
@@ -226,8 +277,10 @@ async def ils_holdings(physical_service_id: str, request: Request) -> dict:
     """SPEC.md REQ-18b (pułapka) — termin zwrotu dla niedostępnego egzemplarza. Zwraca dane TYLKO gdy
     body zawiera niepusty `holKey` w `locations[0]` (replikuje empirycznie zweryfikowane zachowanie
     realnego Primo) — inaczej 200 z pustą listą `items`, NIE 404, dokładnie jak prawdziwe API.
+
+    Mimo ścieżki `priv` CELOWO nie sprawdza `Authorization` (REQ-G2): prawdziwe Primo odpowiada tu tak samo
+    bez tokena, z tokenem gościa i z tokenem z logowania — nagłówek jest w całości ignorowany.
     """
-    _require_valid_token(request)
     body = await request.json()
     locations = body.get("locations") or []
     request_holding = locations[0] if locations else None

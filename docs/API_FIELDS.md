@@ -52,7 +52,7 @@ na zachowanie API.
 | Pole | Realny Primo | `omnis-py` | `omnis-mobile` | W mocku | Uwagi |
 |---|---|---|---|---|---|
 | `btitle` | ✅ | ✅ | ✅ | ✅ | |
-| `au` | ✅ (bywa `null`!) | ✅ | ✅ | ✅ (zawsze wypełnione) | w realnej próbce bywało `null`, gdy autorstwo niejednoznaczne — nasze fikcyjne dzieła mają zawsze jednego autora, więc zawsze wypełnione |
+| `au` | ✅ (bywa `null`!) | ✅ | ✅ | ✅ (zawsze wypełnione) | w realnej próbce bywało `null`, gdy autorstwo niejednoznaczne — nasze fikcyjne dzieła mają zawsze jednego autora, więc zawsze wypełnione. Format **„Nazwisko, Imię”** jak w realnym Primo (`"Weir, Andy"`, `"Nibylska, Karolina"`), tak samo `addau`, `sort.author`, `display.contributor`. `omnis-mobile` wysyła tę wartość 1:1 jako `q=creator,contains,<au>` (SPEC.md REQ-G5), więc przecinek w środku to realna ścieżka, nie kosmetyka |
 | `pub` | ✅ | ✅ | ✅ | ✅ | |
 | `date` | ✅ | ✅ | ✅ | ✅ | |
 | `isbn` | ✅ | ✅ | ✅ | ✅ | |
@@ -111,6 +111,18 @@ na zachowanie API.
 | Pole | Realny Primo | `omnis-py` | `omnis-mobile` | W mocku | Uwagi |
 |---|---|---|---|---|---|
 | `data.itemInfo.locations[].items[].itemstatusname` | ✅ | ✅ (regex daty + "przekroczon") | ✅ | ✅ | jedyna ścieżka czytana przez obu klientów; brak realnego zrzutu pełnej koperty tego endpointu (tylko ta ścieżka była empirycznie weryfikowana), więc mock nie dodaje niczego poza nią |
+
+Mimo ścieżki `priv` endpoint **nie wymaga tokena** (SPEC.md REQ-G2). Realne Primo odpowiada tak samo bez
+nagłówka `Authorization`, z tokenem gościa i z tokenem z logowania (sprawdzone na 8 tenantach), a mock
+całkowicie ignoruje ten nagłówek.
+
+## `GET /primaws/rest/pub/institution/{institution}/guestJwt` (SPEC.md REQ-G1)
+
+Odpowiedź to **nie obiekt**, tylko literał stringu JSON z tokenem. Z payloadu tokena mock generuje
+kluczowe pola prawdziwego tokena gościa: `iss`, `userName`, `user`, `displayName` (`null`), `userGroup`
+(`"GUEST"`), `institution`, `viewId`, `signedIn` (`null`), `onCampus`, `language`, `iat`, `exp`. Żaden
+znany klient nie czyta payloadu tokena gościa, bo `omnis-mobile` tylko przekazuje token dalej jako
+`Bearer`. Pola są więc wyłącznie dla wierności kształtu.
 
 ## Świadome uproszczenia zachowania (nie tylko kształtu pól)
 

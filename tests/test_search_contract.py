@@ -57,7 +57,8 @@ async def test_search_groups_versions_and_resolves_due_dates(client: OmnisClient
     assert len(results) == 1
     result = results[0]
     assert result.title == "Cienie Nibylandii"
-    assert result.author == "Karolina Nibylska"
+    # `addata.au` w formacie "Nazwisko, Imię", jak w prawdziwym Primo (SPEC.md REQ-G5, "Dane katalogu").
+    assert result.author == "Nibylska, Karolina"
     assert len(result.versions) == 2
 
     by_mmsid = {v.mmsid: v for v in result.versions}

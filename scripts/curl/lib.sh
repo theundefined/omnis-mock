@@ -23,3 +23,11 @@ get_token() {
         -d "authenticationProfile=Alma&username=${DEMO_USERNAME}&password=${DEMO_PASSWORD}&institution=MOCK&view=MOCK:MOCK&targetUrl=x")
     python3 -c "import json,sys; print(json.load(sys.stdin)['jwtData'])" <<<"$response"
 }
+
+# Pobiera token gościa (SPEC.md REQ-G1, bez logowania) i wypisuje SAM token na stdout — do użycia jako:
+#   GUEST_TOKEN=$(get_guest_token)
+# Body odpowiedzi to literał stringu JSON (token w cudzysłowach) — cudzysłowy zdejmujemy.
+get_guest_token() {
+    curl -sS "$BASE_URL/primaws/rest/pub/institution/MOCK/guestJwt?isGuest=true&lang=pl&targetUrl=x&viewId=MOCK:MOCK" |
+        tr -d '"'
+}

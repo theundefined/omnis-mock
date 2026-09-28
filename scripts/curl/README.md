@@ -45,4 +45,8 @@ pasują do lokalnego serwera z domyślną konfiguracją z `.env.example`.
 | `12_catalog_search_delivery.sh` | REQ-17 | dostępność per filia, pełny `holding` z `holKey` |
 | `13_get_physical_service.sh` | REQ-18 | id usługi fizycznej; nieznany mmsid → 404 |
 | `14_ils_holdings.sh` | REQ-18b | termin zwrotu — z `holKey` vs bez (pusta odpowiedź, nie 404) |
+| `15_guest_jwt.sh` | REQ-G1 | token gościa (literał stringu JSON), dekoduje payload; bez parametrów → 400 |
+| `16_guest_search_pipeline.sh` | REQ-G2, REQ-G4 | pełny pipeline wyszukiwarki tokenem gościa, bez logowania (`scope=MyInstitution`) |
+| `17_creator_search.sh` | REQ-G5 | `q=creator,contains,<au>` (z przecinkiem) vs słowo z tytułu |
+| `18_guest_myaccount_denied.sh` | REQ-G3 | token gościa na `myaccount/*` → 200 z `"status":"failed"` (nie 401) |
 | `run_all.sh` | wszystkie powyższe | pełny przebieg z podsumowaniem PASS/FAIL |

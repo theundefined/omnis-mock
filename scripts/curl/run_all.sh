@@ -167,6 +167,67 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+check_true() {
+    local desc="$1" actual="$2"
+    if [ "$actual" = "True" ]; then
+        printf "  PASS  %-55s\n" "$desc"
+        PASS=$((PASS + 1))
+    else
+        printf "  FAIL  %-55s (%s)\n" "$desc" "$actual"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+echo "-- REQ-G1 --"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/pub/institution/MOCK/guestJwt")
+check_status "GET /guestJwt bez parametrów -> 400" 400 "$code"
+GUEST_RAW=$(curl -sS "$BASE_URL/primaws/rest/pub/institution/MOCK/guestJwt?isGuest=true&lang=pl&targetUrl=x&viewId=MOCK:MOCK")
+ok=$(python3 -c "
+import base64, json, sys
+t = json.loads(sys.argv[1]); p = t.split('.')[1]; p += '=' * ((4 - len(p) % 4) % 4)
+c = json.loads(base64.b64decode(p))
+print(isinstance(t, str) and t.count('.') == 2 and c['userGroup'] == 'GUEST' and c['displayName'] is None)
+" "$GUEST_RAW" 2>/dev/null || echo "błąd parsowania")
+check_true "GET /guestJwt -> string JSON, 3 segmenty, userGroup=GUEST" "$ok"
+GUEST_TOKEN=$(tr -d '"' <<<"$GUEST_RAW")
+
+echo "-- REQ-G2 --"
+HOLDING=$(curl -sS -X POST "$BASE_URL/primaws/rest/pub/delivery" -H "Authorization: Bearer $GUEST_TOKEN" \
+    -H "Content-Type: application/json" -d '["almaMOCK-SEARCH-A2"]' |
+    python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)[0]['delivery']['holding'][0]))")
+for auth_desc in "tokenem gościa" "bez tokena"; do
+    if [ "$auth_desc" = "tokenem gościa" ]; then AUTH=(-H "Authorization: Bearer $GUEST_TOKEN"); else AUTH=(); fi
+    ok=$(curl -sS -X POST "$BASE_URL/primaws/rest/priv/ILSServices/holdings/PS-MOCK-SEARCH-A2" "${AUTH[@]}" \
+        -H "Content-Type: application/json" -d "{\"locations\":[$HOLDING]}" |
+        python3 -c "import json,sys; print('przekroczony' in json.load(sys.stdin)['data']['itemInfo']['locations'][0]['items'][0]['itemstatusname'])" 2>/dev/null || echo "brak terminu zwrotu")
+    check_true "POST /ILSServices/holdings $auth_desc -> termin zwrotu" "$ok"
+done
+
+echo "-- REQ-G3 --"
+for path in loans counters; do
+    ok=$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/$path" -H "Authorization: Bearer $GUEST_TOKEN" |
+        python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status'] == 'failed' and d['reply-code'] == '0002')" 2>/dev/null || echo "inna odpowiedź")
+    check_true "GET /$path tokenem gościa -> 200 + reply-code 0002" "$ok"
+done
+
+echo "-- REQ-G4 --"
+for scope in MyInstitution MyInstitution2; do
+    code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/pub/pnxs?q=any,contains,Nibylandii&scope=$scope")
+    check_status "GET /pnxs scope=$scope -> 200" 200 "$code"
+done
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/pub/pnxs?q=any,contains,Nibylandii&scope=Bogus")
+check_status "GET /pnxs nieznany scope -> 400" 400 "$code"
+
+echo "-- REQ-G5 --"
+count_docs() {
+    curl -sS -G "$BASE_URL/primaws/rest/pub/pnxs" --data-urlencode "q=$1" |
+        python3 -c "import json,sys; print(len(json.load(sys.stdin)['docs']))"
+}
+ok=$([ "$(count_docs "creator,contains,Nibylska, Karolina")" = "1" ] && echo True || echo "brak wyniku")
+check_true "GET /pnxs creator z przecinkiem -> 1 wynik" "$ok"
+ok=$([ "$(count_docs "creator,contains,Cienie")" = "0" ] && echo True || echo "znaleziono po tytule")
+check_true "GET /pnxs creator słowem z tytułu -> 0 wyników" "$ok"
+
 echo
 echo "=== Podsumowanie: $PASS PASS, $FAIL FAIL ==="
 [ "$FAIL" -eq 0 ]

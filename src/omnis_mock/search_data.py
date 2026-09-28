@@ -205,6 +205,14 @@ def _alma_id(mmsid: str) -> str:
     return f"alma{mmsid}"
 
 
+def _inverted_author(author: str) -> str:
+    """ "Karolina Nibylska" -> "Nibylska, Karolina" — format, w jakim prawdziwe Primo zwraca autora w
+    `addata.au`/`addau`/`sort.author`/`display.contributor` (np. "Weir, Andy", "Mickiewicz, Adam"). Fixture
+    trzyma autora w naturalnej kolejności (tak też jest w `display.title` i w wypożyczeniach, `data.py`)."""
+    first, _, last = author.rpartition(" ")
+    return f"{last}, {first}" if first else author
+
+
 def _build_pnx(work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any]:
     """Kształt `pnx` z realnym zestawem pól (docs/API_FIELDS.md) — nie tylko te czytane przez `omnis-py`,
     żeby ten sam fixture obsłużył też pola specyficzne dla `omnis-mobile` i każdą przyszłą zmianę klienta.
@@ -213,6 +221,7 @@ def _build_pnx(work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any]:
     recordid = _alma_id(mmsid)
     title = work["title"]
     author = work["author"]
+    author_inv = _inverted_author(author)
     series = work["series"]
 
     return {
@@ -226,7 +235,7 @@ def _build_pnx(work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any]:
             "creationdate": [edition["date"]],
             "publisher": [f"{work['place']} : {work['publisher']}"],
             "mms": [mmsid],
-            "contributor": [f"{author} Autor$$Q{author}"],
+            "contributor": [f"{author_inv} Autor$$Q{author_inv}"],
             "edition": [edition["edition_label"]],
             "series": [f"{series}$$Q{series}"] if series else [],
             "genre": list(work["genres"]),
@@ -235,11 +244,11 @@ def _build_pnx(work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any]:
             "subject": list(work["subjects"]),
         },
         "addata": {
-            "au": [author],
+            "au": [author_inv],
             "aulast": [author.split(" ")[-1]],
             "aufirst": [author.split(" ")[0]],
             "auinit": [author[0]],
-            "addau": [author],
+            "addau": [author_inv],
             "date": [edition["date"]],
             "isbn": [edition["isbn"]],
             "cop": [work["place"]],
@@ -253,7 +262,7 @@ def _build_pnx(work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any]:
         },
         "sort": {
             "title": [f"{title} /"],
-            "author": [author],
+            "author": [author_inv],
             "creationdate": [edition["date"]],
         },
         "control": {
@@ -311,9 +320,30 @@ def _build_holding(edition: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _parse_q(q: str) -> str:
-    prefix = "any,contains,"
-    return q[len(prefix) :] if q.startswith(prefix) else q
+def _parse_q(q: str) -> tuple[str, str]:
+    """`"<pole>,<operator>,<wartość>"` -> `(pole, wartość)` (SPEC.md REQ-G5). Dzieli TYLKO na dwóch pierwszych
+    przecinkach — wartość może zawierać przecinki (`"creator,contains,Weir, Andy"`). Operator jest
+    ignorowany (każdy traktowany jak `contains`). `q` bez tego formatu -> `("any", q)`."""
+    parts = q.split(",", 2)
+    if len(parts) == 3:
+        return parts[0], parts[2]
+    return "any", q
+
+
+def _normalize(text: str) -> str:
+    """Case-insensitive, przecinki jako spacje, zwinięte białe znaki — żeby `"Nibylska, Karolina"` i
+    `"Nibylska Karolina"` dopasowały się tak samo (prawdziwe Primo zwraca dla obu te same wyniki, REQ-G5)."""
+    return " ".join(text.replace(",", " ").lower().split())
+
+
+def _haystack(work: dict[str, Any], field: str) -> str:
+    """Tekst, względem którego dopasowujemy zapytanie. `creator` — TYLKO autor (w obu formach: naturalnej i
+    "Nazwisko, Imię"), bez tytułu (REQ-G5); `any` i nieznane pola — tytuł + autor (REQ-15)."""
+    author = work["author"]
+    authors = f"{author} {_inverted_author(author)}"
+    if field == "creator":
+        return _normalize(authors)
+    return _normalize(f"{work['title']} {authors}")
 
 
 def _parse_qinclude(q_include: str) -> Optional[str]:
@@ -327,7 +357,8 @@ def search(q: str, q_include: str, offset: int, limit: int) -> tuple[list[dict[s
 
     Dopasowanie top-level: case-insensitive substring CAŁEGO zapytania względem "{title} {author}" —
     świadomie NIE tokenizacja/OR (REQ-15), żeby ogólne słowo nie trafiło przypadkiem w jeden z 3
-    fikcyjnych rekordów i nie zepsuło REQ-14 (`search_books("cokolwiek")` musi zostać pusty).
+    fikcyjnych rekordów i nie zepsuło REQ-14 (`search_books("cokolwiek")` musi zostać pusty). Pole z `q`
+    (REQ-G5): `creator` zawęża dopasowanie do samego autora, `any` i każde inne — tytuł + autor.
     """
     group_id = _parse_qinclude(q_include) if q_include else None
     if group_id:
@@ -339,11 +370,12 @@ def search(q: str, q_include: str, offset: int, limit: int) -> tuple[list[dict[s
         docs = [{"pnx": _build_pnx(work, edition)} for work, edition in editions]
         return docs, len(docs)
 
-    query_text = _parse_q(q).strip().lower()
+    field, value = _parse_q(q)
+    query_text = _normalize(value)
     if not query_text:
         return [], 0
 
-    matched_works = [work for work in _WORKS if query_text in f"{work['title']} {work['author']}".lower()]
+    matched_works = [work for work in _WORKS if query_text in _haystack(work, field)]
     total = len(matched_works)
     page = matched_works[offset : offset + limit]
     docs = [{"pnx": _build_pnx(work, work["editions"][0])} for work in page]

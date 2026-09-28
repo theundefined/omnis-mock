@@ -18,8 +18,9 @@ nie jest administratorem sieci OMNIS i nie może podać prawdziwych danych logow
 
 ## Zakres
 
-Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b) i Layer 2 (wyszukiwarka katalogu —
-REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) są zaimplementowane i muszą działać. `get_record_details`,
+Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b), Layer 2 (wyszukiwarka katalogu —
+REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) oraz anonimowe wyszukiwanie tokenem gościa i wyszukiwanie po
+autorze (REQ-G1..REQ-G5) są zaimplementowane i muszą działać. `get_record_details`,
 `/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz "Poza zakresem" niżej.
 
 ### Konto demo
@@ -145,7 +146,8 @@ realnego Primo: `docs/API_FIELDS.md`.
 - **REQ-14**: zapytanie **niczego nie trafiające** w fixture zwraca `200` z `{"docs": [], "info": {...}}`
   (dokładnie zachowanie sprzed Layer 2, patrz REQ-15 niżej dla dokładnego kształtu `info`). Bez tokena
   działa tak samo jak z tokenem.
-- **REQ-15 (dopasowanie top-level)**: `q="any,contains,<query>"` — mock wyciąga `<query>` i dopasowuje
+- **REQ-15 (dopasowanie top-level)**: `q="any,contains,<query>"` (inne pola niż `any`, np. `creator`,
+  opisuje REQ-G5) — mock wyciąga `<query>` i dopasowuje
   **case-insensitive substring całego zapytania** względem `"{tytuł} {autor}"` danego dzieła. Świadomie
   **NIE tokenizacja/OR** — jedno ogólne słowo w zapytaniu nie może trafić przypadkiem w żaden z fikcyjnych
   rekordów fixture, bo zepsułoby to REQ-14 (np. `search_books("cokolwiek")` musi zostać pusty). Wynik: **co
@@ -177,7 +179,9 @@ bezpośrednio.
 
 #### 9. `POST /primaws/rest/priv/ILSServices/holdings/{physicalServiceId}` (Layer 2)
 
-Nagłówek: `Authorization: Bearer <token>` (ścieżka `priv`, wymaga tokena jak inne prywatne endpointy).
+Nagłówek `Authorization` jest **ignorowany** — mimo ścieżki `priv` endpoint działa bez tokena, z tokenem
+gościa i z tokenem z logowania, tak jak prawdziwe Primo (REQ-G2 niżej). Do REQ-G2 wymagał tokena z
+logowania.
 
 - **REQ-18b (pułapka, analogiczna do REQ-4/REQ-7/REQ-10/REQ-11)**: odpowiedź niesie `itemstatusname`
   (`data.itemInfo.locations[].items[].itemstatusname`, string z datą `dd/mm/rrrr`, zawierający
@@ -189,6 +193,71 @@ Nagłówek: `Authorization: Bearer <token>` (ścieżka `priv`, wymaga tokena jak
   cały `holding` (pobrany z REQ-17) 1:1 z powrotem w tym żądaniu, poprawne zachowanie tego REQ-u zależy od
   tego, że REQ-17 faktycznie wygenerował `holKey` — to jedyna rzecz w Layer 2, która realnie odróżnia
   "wierny mock" od mocka, który tylko wygląda podobnie na happy path.
+  **Zachowanie zależy od tenanta** (sprawdzone na żywo 2026-09-28, `docs/DEV_NOTES.md`): Raczyńskich
+  (`48OMNIS_BRP`) wymaga `holKey`, a Dolnośląska Biblioteka Publiczna (`48OMNIS_WBP`) zwraca termin
+  zwrotu także bez niego. Mock celowo odwzorowuje surowszy wariant.
+
+### Anonimowe wyszukiwanie (token gościa) i wyszukiwanie po autorze — REQ-G1..REQ-G5
+
+Źródło: zlecenie `omnis-mobile/docs/omnis-mock-guest-search-spec.md` (2026-09-28). Wszystkie zachowania
+opisane tam jako zweryfikowane na żywo na prawdziwym Primo (Biblioteka Raczyńskich + 53 inne tenanty).
+`omnis-mobile` wyszukuje w katalogu **bez logowania**, tak jak oficjalny interfejs WWW Primo: pobiera token
+gościa i nim wykonuje cały pipeline z endpointów 6–9. Aplikacja nie ma wyjątków dla trybu demo, więc mock
+musi to obsłużyć tak jak prawdziwe Primo.
+
+#### 10. `GET /primaws/rest/pub/institution/{institution}/guestJwt`
+
+Wywołanie aplikacji: `?isGuest=true&lang=pl&targetUrl=<dowolny URL>&viewId=MOCK:MOCK`.
+
+- **REQ-G1**: `200`, `Content-Type: application/json;charset=UTF-8` (dokładnie tak, z charsetem). Body to
+  **literał stringu JSON** — token w cudzysłowach (`"eyJ...x.y"`), **nie** obiekt `{"jwtData": ...}` jak w
+  `suprimaLogin`; klient zdejmuje cudzysłowy.
+  - Token: 3 segmenty i kodowanie jak w REQ-4 (standardowy alfabet base64, bez paddingu, payload ASCII).
+    Payload ma kluczowe pola prawdziwego tokena gościa: `iss: "Prima"`, `userName` = `user` =
+    `"anonymous-<MMDD_HHMMSS>"`, `displayName: null`, `userGroup: "GUEST"`, `institution` (ze ścieżki),
+    `viewId` (z query), `signedIn: null`, `onCampus: "false"`, `language` (z `lang`, domyślnie `"en"`),
+    `iat`, `exp` (`iat + 24h`, mock nie sprawdza wygaśnięcia).
+  - Każde wywołanie może wydać nowy token. Token jest zapisywany jako **token gościa**, w rejestrze
+    oddzielnym od tokenów z logowania (`auth.token_kind()`: `"login"` / `"guest"` / `None`).
+  - Brak `viewId` (np. `GET .../guestJwt` bez query) → `400` z pustym body. Inne parametry są opcjonalne.
+
+- **REQ-G2**: cztery endpointy wyszukiwarki (`pnxs`, `delivery`, `getPhysicalService`,
+  `ILSServices/holdings`) **nie sprawdzają `Authorization`**. Działają tak samo bez nagłówka, z tokenem
+  gościa, z tokenem z logowania, a nawet z nieznanym tokenem. Dla pierwszych trzech tak było od początku
+  (REQ-14). Realna zmiana dotyczy `priv/ILSServices/holdings` (sekcja 9), bo prawdziwe Primo też go nie
+  zabezpiecza (sprawdzone na 8 tenantach). Pułapka `holKey` (REQ-18b) działa bez zmian.
+
+- **REQ-G3 (pułapka, analogiczna do REQ-7/REQ-11)**: token gościa **nie** daje dostępu do konta.
+  `GET myaccount/loans`, `GET myaccount/counters` i `POST myaccount/renew_loans` z tokenem gościa zwracają
+  **`200`** (nie 401!) z dokładnie takim body:
+  ```json
+  {"beaconO22":"0","status":"failed","reply-code":"0002","reply-text":"The patron ID is invalid","data":null}
+  ```
+  Klient, który sprawdza tylko kod HTTP, uzna to za sukces. Zachowanie dla `renew_loans` przyjęto
+  analogicznie, bo nie było testowane na żywo. Taki `renew_loans` **nie mutuje** stanu wypożyczeń. Brak
+  tokena albo nieznany token → `401` jak dotąd (REQ-5/REQ-8/REQ-12).
+
+- **REQ-G4** (`pnxs`, parametr `scope`): akceptowane są `MyInstitution` (nowe `omnis-mobile`),
+  `MyInstitution2` (`omnis-py` i starsze `omnis-mobile`) oraz brak parametru lub pusta wartość. Każda inna
+  wartość → `400` z **pustym** body, tak jak w prawdziwym Primo. `tab` jest ignorowany, tak jak w
+  prawdziwym Primo. `scope` jest sprawdzany tylko w `pnxs`: `delivery` go nie waliduje, zgodnie z
+  uproszczeniem z REQ-17.
+
+- **REQ-G5** (`pnxs`, pole w `q`): `q` jest parsowane jako `<pole>,<operator>,<wartość>`, z podziałem
+  **tylko na dwóch pierwszych przecinkach**, bo wartość może zawierać przecinki (`creator,contains,Weir,
+  Andy`). Operator jest ignorowany i zawsze działa jak `contains`. `q` bez dwóch przecinków jest traktowane
+  jako `any` z całym `q` jako wartością.
+  - `any` (i każde nieznane pole) → dopasowanie jak w REQ-15: tytuł + autor.
+  - `creator` → dopasowanie **wyłącznie do autora**, nie do tytułu. `creator,contains,Cienie` nic nie
+    znajduje, choć `any,contains,Cienie` trafia.
+  - Dopasowanie w obu trybach (także REQ-15): case-insensitive substring po normalizacji (przecinki
+    zamienione na spacje, zwinięte białe znaki), względem autora w **obu** zapisach: naturalnym
+    („Karolina Nibylska”) i odwróconym („Nibylska, Karolina”). Dzięki temu `"Nibylska, Karolina"`,
+    `"Nibylska Karolina"` i `"Karolina Nibylska"` dają ten sam wynik, tak jak w prawdziwym Primo
+    („Weir, Andy” i „Weir Andy” zwracają te same 3 wyniki).
+  - `qInclude` (group expansion, REQ-16) dalej ignoruje `q`. Aplikacja przekazuje tam to samo
+    `q=creator,...`, co nie ma wpływu na wynik.
+  - Format autora w katalogu: patrz „Dane katalogu” niżej (`addata.au` = „Nazwisko, Imię”).
 
 ## Endpointy pomocnicze (poza kontraktem Primo)
 
@@ -258,6 +327,12 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
 - Zróżnicowane stany dostępności, jak w "Dane demo" dla wypożyczeń: co najmniej jedna niedostępna wersja z
   terminem **przeszłym** (przeterminowanym, `overdue=True`) i co najmniej jedna z terminem **przyszłym**
   (`overdue=False`) — obie gałęzie reguły "przekroczon" z REQ-18b muszą być pokryte.
+- **Format autora (REQ-G5)**: fixture trzyma autora w naturalnej kolejności („Karolina Nibylska”), tak jak
+  `display.title` („Cienie Nibylandii / Karolina Nibylska.”) i wypożyczenia w `data.py`, które się nie
+  zmieniają. Pola `addata.au`, `addata.addau`, `sort.author` i `display.contributor` mają format prawdziwego
+  Primo, czyli „Nazwisko, Imię” („Nibylska, Karolina”, „Mickiewicz, Adam”). `aulast`/`aufirst` to
+  odpowiednio nazwisko i imię. `omnis-py` bierze autora wyniku z `addata.au`, więc
+  `SearchResult.author == "Nibylska, Karolina"`.
 - Katalog jest **bezstanowy** (bez odpowiednika `_renewal_extensions`) — daty w `itemstatusname` liczone
   względem `date.today()` przy każdym żądaniu, tak samo jak wypożyczenia w "Dane demo" wyżej.
   `_works_from_loans()` czyta wyłącznie statyczny `data._LOAN_TEMPLATES`, nigdy `data.get_demo_loans()` ani
@@ -298,3 +373,8 @@ przez prawdziwego `OmnisClient`, z asercjami na polach liściach (`edition`, `br
 `branches[].due_date`, `branches[].overdue`), nie tylko na długości listy wyników — samo `len(results) > 0`
 nic nie dowodzi, bo `omnis-py` łyka błędy HTTP z `getPhysicalService`/`ILSServices` po cichu (patrz
 `docs/API_FIELDS.md`, uzasadnienie REQ-18b).
+
+Dla REQ-G1..REQ-G5: `tests/test_guest_search.py`. REQ-G2 sprawdza prawdziwy `OmnisClient` **bez
+logowania**, z tokenem gościa: asercja na `due_date`, która dowodzi, że `ILSServices/holdings` przyjął
+token gościa. Reszta to surowe `httpx`, bo `omnis-py` nie ma API do `guestJwt` ani `q=creator`, a
+`get_loans()` wywróciłby się na `"data": null` z REQ-G3, zamiast pozwolić to sprawdzić.
