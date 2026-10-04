@@ -299,7 +299,103 @@ async def ils_holdings(physical_service_id: str, request: Request) -> dict:
     body = await request.json()
     locations = body.get("locations") or []
     request_holding = locations[0] if locations else None
-    status_name = search_data.holding_status(physical_service_id, request_holding)
-    if status_name is None:
+    location = search_data.holding_items(physical_service_id, request_holding)
+    if location is None:
         return {"data": {"itemInfo": {"locations": []}}}
-    return {"data": {"itemInfo": {"locations": [{"items": [{"itemstatusname": status_name}]}]}}}
+    return {"data": {"itemInfo": {"locations": [location]}}}
+
+
+# --- Zamówienia (rezerwacje), SPEC.md REQ-H4..REQ-H12 -------------------------------------------------------
+
+# REQ-H4: sześć kategorii, zawsze wszystkie; pięć ostatnich zawsze puste (kształt elementu nieznany).
+_EMPTY_REQUEST_CATEGORIES = {
+    "photocopies": {"photocopy": []},
+    "bookings": {"booking": []},
+    "cdls": {"cdl": []},
+    "ills": {"ill": []},
+    "acqs": {"acq": []},
+}
+
+
+@app.get("/primaws/rest/priv/myaccount/requests", response_model=None)
+async def my_requests(request: Request) -> dict | JSONResponse:
+    """SPEC.md REQ-H4/REQ-H5 — lista zamówień. Token gościa -> REQ-G3 (200 "failed")."""
+    if (denied := _require_patron(request)) is not None:
+        return denied
+    return {"data": {"holds": {"hold": data.get_demo_holds()}, **_EMPTY_REQUEST_CATEGORIES}}
+
+
+@app.post("/primaws/rest/priv/myaccount/cancel_requests", response_model=None)
+async def cancel_requests(request: Request) -> dict | JSONResponse:
+    """SPEC.md REQ-H11 (pułapka) — `request_type` musi być dokładnie `"holds"` (liczba mnoga). Inny typ albo
+    nieznany id -> 200 bez zmiany stanu (jak REQ-13b), z tą samą kopertą sukcesu i pustą listą."""
+    if (denied := _require_patron(request)) is not None:
+        return denied
+    body = await request.json()
+    request_id = str(body.get("request_id", ""))
+    cancelled = body.get("request_type") == "holds" and data.cancel_demo_hold(request_id)
+    holds = [{"requestid": request_id, "note": {"type": "info"}}] if cancelled else []
+    return {
+        "beaconO22": "646",
+        "status": "ok",
+        "reply-code": "0000",
+        "reply-text": "OK",
+        "data": {"holds": {"hold": holds}},
+    }
+
+
+def _require_login_token(request: Request) -> None:
+    """`ILSServices/itemServices` i `itemQueue`: tylko token z logowania, inaczej 401 (REQ-H10; zachowanie
+    prawdziwego Primo dla gościa jest niezweryfikowane)."""
+    if auth.token_kind(request.headers.get("Authorization")) != "login":
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+@app.get(
+    "/primaws/rest/priv/ILSServices/itemServices/{mmsid}/item/{item_id}/{psid}/AlmaItemRequest",
+    response_model=None,
+)
+async def item_request_form(mmsid: str, item_id: str, psid: str, request: Request) -> dict:
+    """SPEC.md REQ-H10a — formularz zamówienia (miejsca odbioru w formacie `<libraryId>$$<TYPE>`). Egzemplarz
+    nieznany albo `allowed: "N"` -> 400."""
+    _require_login_token(request)
+    form = search_data.item_form(item_id)
+    if form is None:
+        raise HTTPException(status_code=400, detail="Item cannot be requested")
+    return form
+
+
+@app.post(
+    "/primaws/rest/priv/ILSServices/itemServices/{mmsid}/item/{item_id}/{psid}/AlmaItemRequest",
+    response_model=None,
+)
+async def item_request_place(mmsid: str, item_id: str, psid: str, request: Request) -> dict:
+    """SPEC.md REQ-H10b — złożenie zamówienia. Odpowiedź to goła koperta BEZ `requestid` (zweryfikowana na
+    żywo); `pickupLocation` spoza formularza albo nieznany `itemId` -> 400. Mock dodaje zamówienie od razu
+    (prawdziwe Primo z kilkusekundowym opóźnieniem — `omnis-py` i tak ponawia odczyt)."""
+    _require_login_token(request)
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid body")
+    body_item_id = str(body.get("itemId", ""))
+    info = search_data.catalog_hold_info(search_data.item_mmsid(body_item_id) or "", body_item_id)
+    if info is None or not info["allowed"] or body.get("requestType") != "hold":
+        raise HTTPException(status_code=400, detail="Item cannot be requested")
+    pickup = next((p for p in info["pickups"] if p["id"] == body.get("pickupLocation")), None)
+    if pickup is None or (body.get("pickupLibraryId") not in (None, pickup["id"])):
+        raise HTTPException(status_code=400, detail="Invalid pickup location")
+    data.place_demo_hold(info["mmsid"], info["item_id"], info["title"], info["author"], pickup["name"])
+    return {"beaconO22": "646", "reply-text": "ok", "status": "ok"}
+
+
+@app.get("/primaws/rest/priv/ILSServices/itemQueue/{item_id}", response_model=None)
+async def item_queue(item_id: str, request: Request) -> dict:
+    """SPEC.md REQ-H12 — kolejka zamówień na egzemplarz. Wymaga tokena z logowania (spójnie z
+    `itemServices`); nieznany egzemplarz -> 404."""
+    _require_login_token(request)
+    if search_data.item_mmsid(item_id) is None:
+        raise HTTPException(status_code=404, detail="Unknown item")
+    return {"itemId": item_id, "itemQueueString": f"(zamówienie: {data.hold_queue_length(item_id)})"}

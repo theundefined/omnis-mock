@@ -68,11 +68,12 @@ silniej niż jakiekolwiek ręcznie pisane assercje. Ten plik jest kontraktem QA 
 ```
 src/omnis_mock/
   main.py         FastAPI — routing; dokładny kształt JSON per endpoint w docs/SPEC.md (REQ-1..REQ-18b,
-                  REQ-G1..G6, REQ-L1..L5)
+                  REQ-G1..G6, REQ-L1..L5, REQ-H1..H12)
   auth.py         fake JWT (3 segmenty, payload ASCII-only — REQ-4) + dwa rejestry tokenów (in-memory):
                   z logowania i gościa (guestJwt, REQ-G1); token_kind() je rozróżnia
   data.py         fixture wypożyczeń demo-konta (aktywne + osobna historia, type=history) + stan po
-                  renew_loan (in-memory, resetowany co proces); adresy/kody filii wspólne z katalogiem
+                  renew_loan (in-memory, resetowany co proces); adresy/kody filii wspólne z katalogiem;
+                  stan zamówień (REQ-H1..H3: limit 5, TTL 24h, seed, wstrzykiwalny zegar `set_clock`)
   search_data.py  fixture katalogu (3 fikcyjne dzieła + 4 wygenerowane z data._LOAN_TEMPLATES, ten sam
                   mmsid co odpowiedni loan, oznaczone jako unavailable) dla wyszukiwarki — bezstanowy,
                   bez odpowiednika renew_loan
@@ -94,7 +95,17 @@ które pole jest zwracane przez realne Primo i kto (`omnis-py`/`omnis-mobile`) j
 Komendy wyżej i `scripts/curl/README.md`); `demo-client/` (generowane przez ten drugi skrypt) jest
 gitignored, nigdy nie commitować.
 
+Zamówienia (REQ-H1..H12, Faza 6): `myaccount/requests`, `cancel_requests`, `itemServices/.../AlmaItemRequest`
+(GET formularz, POST złożenie), `itemQueue`; egzemplarze (`itemid`, `listofservices`) generuje `search_data.py`.
+`tests/test_holds_contract.py`; testy pełnego przepływu `OmnisClient` są pomijane na `omnis-py` z PyPI bez
+`place_hold` (uruchom z `pip install -e ../omnis-py`, szczegóły w `docs/DEV_NOTES.md`).
+
 ## Nieoczywiste pułapki (pełne wyjaśnienie: docs/SPEC.md)
+
+- Zamówienia: `cancel_requests` wymaga `request_type: "holds"` (liczba mnoga, REQ-H11), inaczej 200 bez zmiany.
+  `hold.available`/`cancel` to `"Y"`/`"N"`, nie bool. `pickupLocation.key` to `<id>$$<TYPE>`. POST
+  `AlmaItemRequest` zwraca kopertę BEZ `requestid`. Stan zamówień jest współdzielony i publiczny (limit 5
+  razem z seedem, TTL 24h), więc testy muszą go resetować (`data.reset_state()`).
 
 - `Loan` w `omnis-py` ma dokładnie 10 wymaganych kluczy — brak jednego to `ValidationError` u KAŻDEGO
   klienta w ekosystemie (`omnis-py`, `omnis-android`), nie tylko w tym mocku.

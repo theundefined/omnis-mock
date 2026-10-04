@@ -143,7 +143,9 @@ async def test_ils_holdings_works_without_authorization_header(http: httpx.Async
     assert response.status_code == 200
     items = response.json()["data"]["itemInfo"]["locations"][0]["items"]
     expected_due = (date.today() + timedelta(days=12)).strftime("%d/%m/%Y")
-    assert items == [{"itemstatusname": f"Wypożyczenie do {expected_due}"}]
+    # REQ-H9 rozszerzył `items[]` o pełny element (itemid, listofservices...); termin zwrotu zostaje w pierwszym.
+    assert len(items) == 1
+    assert items[0]["itemstatusname"] == f"Wypożyczenie do {expected_due}"
 
 
 # --- REQ-G3 ---

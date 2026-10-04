@@ -207,6 +207,67 @@ _MMSID_TO_WORK_EDITION: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
 }
 
 
+# --- Egzemplarze i zamawianie (SPEC.md REQ-H8..REQ-H10) ---------------------------------------------------------
+# Każda edycja ma jeden egzemplarz (sufiks "1", dopuszczony do zamówienia, także gdy wypożyczony: wtedy trafia
+# się do kolejki). Wyjątek: A1 ma drugi egzemplarz w czytelni z `allowed: "N"` (ścieżka „nie można zamówić”).
+_EXTRA_ITEMS: dict[str, list[dict[str, Any]]] = {
+    "MOCK-SEARCH-A1": [
+        {
+            "suffix": "2",
+            "allowed": "N",
+            "category": "Tylko na miejscu",
+            "policy": "Czytelnia - nie wypożycza się",
+            "callnumber2": "821.162.1-3 CZ",
+        }
+    ],
+}
+
+# Filia z DWOMA miejscami odbioru (REQ-H10a, ścieżka wyboru `--pickup`): reszta ma jedno.
+_EXTRA_PICKUPS: dict[str, list[tuple[str, str]]] = {
+    "FD1": [("FD1C", "Filia Demo 1 (czytelnia)")],
+}
+
+_REQUEST_PATH = "/primaws/rest/priv/ILSServices/itemServices/{mmsid}/item/{item_id}/PS-{mmsid}/AlmaItemRequest"
+
+
+def _item_specs(edition: dict[str, Any]) -> list[dict[str, Any]]:
+    primary = {
+        "suffix": "1",
+        "allowed": "Y",
+        "category": "Wypożyczane na 30 dni",
+        "policy": "Wypożyczane na 30 dni",
+        "callnumber2": "821.162.1-3",
+    }
+    return [primary, *_EXTRA_ITEMS.get(edition["mmsid"], [])]
+
+
+def _library_id(library_code: str) -> str:
+    return f"MOCKLIB-{library_code}"
+
+
+def _pickups(library_code: str, main_location: str) -> list[dict[str, str]]:
+    """Miejsca odbioru dla filii: klucz formularza to `<libraryId>$$<TYPE>` (REQ-H10a)."""
+    places = [{"id": _library_id(library_code), "type": "LIBRARY", "name": main_location}]
+    places += [
+        {"id": _library_id(code), "type": "LIBRARY", "name": name}
+        for code, name in _EXTRA_PICKUPS.get(library_code, [])
+    ]
+    return places
+
+
+# item_id -> (work, edition, spec, barcode); identyfikatory deterministyczne, unikalne w całym katalogu.
+_ITEMS: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]] = {}
+for _work in _WORKS:
+    for _edition in _work["editions"]:
+        for _spec in _item_specs(_edition):
+            _ITEMS[f"MOCK-ITEM-{_edition['mmsid']}-{_spec['suffix']}"] = (
+                _work,
+                _edition,
+                _spec,
+                f"MOCKBC{len(_ITEMS) + 1:04d}",
+            )
+
+
 def _alma_id(mmsid: str) -> str:
     return f"alma{mmsid}"
 
@@ -382,6 +443,13 @@ def search(q: str, q_include: str, offset: int, limit: int) -> tuple[list[dict[s
         return docs, len(docs)
 
     field, value = _parse_q(q)
+    # REQ-H7: samo MMS id (z prefiksem `alma` albo bez) -> DOKŁADNIE ta jedna edycja, dopasowanie całego
+    # wyrażenia (nie podciąg: `...A1` nie łapie `...A10`). Reszta flow zamówienia (`omnis-py`
+    # `_resolve_record_holdings`) wymaga, żeby wynik był jeden.
+    mmsid_query = value.strip().removeprefix("alma")
+    if mmsid_query in _MMSID_TO_WORK_EDITION:
+        work, edition = _MMSID_TO_WORK_EDITION[mmsid_query]
+        return ([{"pnx": _build_pnx(work, edition)}] if offset == 0 else []), 1
     query_text = _normalize(value)
     if not query_text:
         return [], 0
@@ -428,37 +496,142 @@ def record(record_id: str) -> Optional[dict[str, Any]]:
 
 
 def physical_service_id(bare_mmsid: str) -> Optional[str]:
-    """SPEC.md REQ-18: `f'PS-{bare_mmsid}'` dla znane edycje z ustawionym `due_offset_days` (czyli
-    niedostępne), `None` inaczej -> `404` w main.py (klient łapie to jako `httpx.HTTPError` -> `None`,
-    dokładnie oczekiwana ścieżka degradacji).
+    """SPEC.md REQ-18/REQ-H8: `f'PS-{bare_mmsid}'` dla KAŻDEJ znanej edycji (zamówić można też egzemplarz
+    dostępny na półce), `None` dla nieznanej -> `404` w main.py (klient łapie to jako `httpx.HTTPError` ->
+    `None`, oczekiwana ścieżka degradacji).
     """
-    pair = _MMSID_TO_WORK_EDITION.get(bare_mmsid)
-    if pair is None or pair[1]["due_offset_days"] is None:
+    if bare_mmsid not in _MMSID_TO_WORK_EDITION:
         return None
     return f"PS-{bare_mmsid}"
 
 
-def holding_status(physical_service_id_value: str, request_holding: Optional[dict[str, Any]]) -> Optional[str]:
-    """SPEC.md REQ-18b (pułapka): `itemstatusname` z aktualną datą względną — TYLKO gdy
-    `request_holding` zawiera niepusty `holKey`. Replikuje empirycznie zweryfikowane zachowanie realnego
-    Primo (`omnis-mobile/docs/api-verification-response.md`): bez `holKey` w przychodzącym `locations[0]`
-    endpoint zwraca puste dane mimo `200 OK`. Zwraca `None` w obu przypadkach degradacji (nieznany
-    `physicalServiceId` ALBO brak `holKey`) — main.py mapuje `None` na pustą listę `items`, nie `404`.
-    """
-    if not physical_service_id_value.startswith("PS-"):
-        return None
-    bare_mmsid = physical_service_id_value[len("PS-") :]
-    pair = _MMSID_TO_WORK_EDITION.get(bare_mmsid)
-    if pair is None:
-        return None
-    due_offset_days = pair[1]["due_offset_days"]
-    if due_offset_days is None:
-        return None
-    if not request_holding or not request_holding.get("holKey"):
-        return None
-
-    due_date = date.today() + timedelta(days=due_offset_days)
-    date_str = due_date.strftime("%d/%m/%Y")
+def _status_name(edition: dict[str, Any], spec: dict[str, Any]) -> str:
+    """`itemstatusname` egzemplarza. Wypożyczony (`due_offset_days`) niesie datę `dd/mm/rrrr` (REQ-18b),
+    z „przekroczon…” gdy termin minął; reszta stoi na półce."""
+    due_offset_days = edition["due_offset_days"]
+    if due_offset_days is None or spec["suffix"] != "1":
+        return "Egzemplarz na półce"
+    date_str = (date.today() + timedelta(days=due_offset_days)).strftime("%d/%m/%Y")
     if due_offset_days < 0:
         return f"Wypożyczony - termin zwrotu przekroczony od {date_str}"
     return f"Wypożyczenie do {date_str}"
+
+
+def _build_item(work: dict[str, Any], edition: dict[str, Any], spec: dict[str, Any], barcode: str) -> dict[str, Any]:
+    """Pełny `items[]` z `ILSServices/holdings` (REQ-H9), pola czytane przez `omnis-py`."""
+    h = edition["holding"]
+    mmsid = edition["mmsid"]
+    item_id = f"MOCK-ITEM-{mmsid}-{spec['suffix']}"
+    link = (
+        _REQUEST_PATH.format(mmsid=mmsid, item_id=item_id)
+        + f"?institution={_INSTITUTION}&hasHold=true&hasBooking=false"
+    )
+    return {
+        "itemid": item_id,
+        "mmsid": mmsid,
+        "itembarcode": barcode,
+        "itemstatusname": _status_name(edition, spec),
+        "itemcategoryname": spec["category"],
+        "itempolicy": spec["policy"],
+        "itemmaterial": "Książka",
+        "callnumber2": spec["callnumber2"],
+        "mainlocationname": h["main_location"],
+        "secondarylocationname": h["sub_location"],
+        "listofservices": {
+            "service": [
+                {
+                    "type": "AlmaItemRequest",
+                    "allowed": spec["allowed"],
+                    "service-type": "OvP",
+                    "enableWithoutLogin": False,
+                    "link-to-service": link,
+                }
+            ]
+        },
+    }
+
+
+def holding_items(
+    physical_service_id_value: str, request_holding: Optional[dict[str, Any]]
+) -> Optional[dict[str, Any]]:
+    """SPEC.md REQ-18b (pułapka) + REQ-H9: `locations[0]` z egzemplarzami filii — TYLKO gdy `request_holding`
+    zawiera niepusty `holKey`. Replikuje empirycznie zweryfikowane zachowanie realnego Primo
+    (`omnis-mobile/docs/api-verification-response.md`): bez `holKey` w przychodzącym `locations[0]` endpoint
+    zwraca puste dane mimo `200 OK`. Zwraca `None` w obu przypadkach degradacji (nieznany `physicalServiceId`
+    ALBO brak `holKey`) — main.py mapuje `None` na pustą listę `locations`, nie `404`.
+    """
+    if not physical_service_id_value.startswith("PS-"):
+        return None
+    pair = _MMSID_TO_WORK_EDITION.get(physical_service_id_value[len("PS-") :])
+    if pair is None:
+        return None
+    if not request_holding or not request_holding.get("holKey"):
+        return None
+    work, edition = pair
+    h = edition["holding"]
+    items = [
+        _build_item(work, edition, spec, _ITEMS[f"MOCK-ITEM-{edition['mmsid']}-{spec['suffix']}"][3])
+        for spec in _item_specs(edition)
+    ]
+    return {"main-location": h["main_location"], "sub-location": h["sub_location"], "items": items}
+
+
+def item_mmsid(item_id: str) -> Optional[str]:
+    """MMS id edycji, do której należy egzemplarz; `None` dla nieznanego `item_id`."""
+    found = _ITEMS.get(item_id)
+    return found[1]["mmsid"] if found else None
+
+
+def catalog_hold_info(mmsid: str, item_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Dane potrzebne do złożenia zamówienia (tytuł i autor jak w `pnx.display`, miejsca odbioru). Bez
+    `item_id` bierze pierwszy egzemplarz edycji. `None` dla nieznanej edycji/egzemplarza."""
+    item_id = item_id or f"MOCK-ITEM-{mmsid}-1"
+    found = _ITEMS.get(item_id)
+    if found is None:
+        return None
+    work, edition, spec, _ = found
+    h = edition["holding"]
+    return {
+        "mmsid": edition["mmsid"],
+        "item_id": item_id,
+        "allowed": spec["allowed"] == "Y",
+        "title": f"{work['title']} / {work['author']}.",
+        "author": _inverted_author(work["author"]),
+        "pickups": _pickups(h["library_code"], h["main_location"]),
+    }
+
+
+def item_form(item_id: str) -> Optional[dict[str, Any]]:
+    """REQ-H10a: odpowiedź GET formularza zamówienia. `None` gdy egzemplarz nieznany albo `allowed: "N"`."""
+    info = catalog_hold_info(_ITEMS[item_id][1]["mmsid"], item_id) if item_id in _ITEMS else None
+    if info is None or not info["allowed"]:
+        return None
+    return {
+        "services-arr": {
+            "services": [
+                {
+                    "itemId": item_id,
+                    "type-name": "AlmaRequest",
+                    "requestType": [{"key": "hold", "value": "almaRequest.requestType.hold"}],
+                    "groups-list-map": [
+                        {
+                            "requestType": "hold",
+                            "materialType": {"key": "BOOK", "value": "Książka"},
+                            "pickupLocation": [
+                                {
+                                    "key": f"{p['id']}$${p['type']}",
+                                    "value": p["name"],
+                                    "category": "Proszę wybrać miejsce odbioru",
+                                    "userAffiliatedCampus": False,
+                                }
+                                for p in info["pickups"]
+                            ],
+                            "termsOfUse": [{"key": "--", "value": "--"}],
+                        }
+                    ],
+                    "chosen-parameters-map": {"pickupInstitution": _INSTITUTION},
+                }
+            ]
+        },
+        "info-notes": [],
+    }

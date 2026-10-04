@@ -118,6 +118,40 @@ inną serializację niż Pydantic, więc przejście testu kontraktowego w Python
 klient sparsuje tę samą odpowiedź bez wyjątku. Nazywamy tę lukę wprost, żeby nikt nie założył, że Faza 2
 ją pokrywa.
 
+## Faza 6 — zamówienia: podgląd, składanie, anulowanie (REQ-H1..REQ-H12) — **zaimplementowane (developer), czeka na QA**
+
+Zlecone z sesji `omnis-py` 2026-10-04, po dodaniu do `omnis-py` składania zamówień (`--place-hold`).
+Podgląd (`--requests`) i anulowanie (`--cancel-hold`) były tam już wcześniej. Kontrakt: `docs/SPEC.md`,
+sekcja „Zamówienia (rezerwacje)”, endpointy 12–15 i rozszerzenia REQ-H7..REQ-H9 istniejącego Layer 2.
+
+**Wzorzec do odwzorowania:** pełny, zredagowany zapis HTTP prawdziwego przepływu (wyszukanie → złożenie →
+lista zamówień) leży lokalnie w `../omnis-py/curls/capture-artemis/` (JSONL, gitignorowany — **nie kopiować
+do tego repo**, tylko przenieść kształty do fixture'ów z fikcyjnymi danymi).
+
+**Kolejność (developer):**
+1. `data.py` — stan zamówień (REQ-H1..REQ-H3: modułowy, limit 5, TTL 24 h, jeden seed), `Requests` w
+   `get_demo_counters()` liczone ze stanu (REQ-H6).
+2. `search_data.py` — `itemid`/`listofservices`/`link-to-service` dla każdego egzemplarza każdej filii
+   (REQ-H9), `getPhysicalService` dla każdej edycji (REQ-H8), wyszukiwanie po samym MMS id (REQ-H7),
+   co najmniej jeden egzemplarz `allowed: "N"` i jedna filia z dwoma miejscami odbioru.
+3. `main.py` — trasy 12–15. `myaccount/*` przez istniejący `_require_patron` (token gościa → REQ-G3).
+4. Testy: rozszerzyć `tests/test_search_contract.py`/nowy `tests/test_holds_contract.py` o pełny przepływ
+   **prawdziwym** `OmnisClient`: `get_holdable_items` → `get_hold_options` → `place_hold` →
+   `get_requests` (jest nowe zamówienie) → `get_item_queue` (+1) → `cancel_hold` → `get_requests`
+   (zniknęło) → `counters` (wróciło). Do tego `scripts/curl/` dla żywego deployu.
+
+**Zależność od wersji `omnis-py`:** `tests/test_contract.py` instaluje `omnis-py` z PyPI. Kroki
+`get_holdable_items`/`get_hold_options`/`place_hold`/`get_item_queue` istnieją od **v0.2.14**
+(wydane na PyPI 2026-10-04) — wystarczy podbić dev-dependency w `pyproject.toml` do `>=0.2.14`, żeby test kontraktowy pokrył cały przepływ.
+
+**QA (Faza 2 dla tej fazy)**: szczególnie pułapki — `"Y"`/`"N"` zamiast bool (REQ-H5), `"holds"` w liczbie
+mnogiej (REQ-H11), format `"<id>$$<TYPE>"` (REQ-H10a), `holKey` wciąż wymagany (REQ-18b), limit/TTL
+(REQ-H2). Potem Faza 4 (deploy) jak zwykle.
+
+**Poza zakresem tej fazy:** `omnis-mobile` (Kotlin) — osobny port. Kształt odpowiedzi sukcesu POST
+`AlmaItemRequest` i `cancel_requests` jest niezweryfikowany (oznaczony w SPEC). Gdy ktoś przechwyci
+prawdziwy, zaktualizować SPEC i `omnis-py` razem.
+
 ## Kolejność w skrócie
 
 ```
@@ -125,4 +159,5 @@ Faza 0 (zrobione) → Faza 0b (commit, człowiek)
   → Faza 1 (developer) → Faza 2 (qa) ──PASS──→ Faza 4 (devops) → Faza 5 (człowiek, emulator)
                                     └─FAIL─→ wraca do Fazy 1
   (Faza 3, Layer 2 — zrobione, poza tym linowym przepływem)
+  (Faza 6, zamówienia — zaimplementowane, czeka na QA: developer → qa → devops, jak Fazy 1/2/4)
 ```

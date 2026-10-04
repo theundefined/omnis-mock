@@ -273,6 +273,62 @@ print(3 <= len(h) <= 5 and 'Y' not in e['showmore'] and not active & {l['loanid'
 " "$LOANS_JSON" 2>/dev/null || echo "błąd parsowania")
 check_true "GET /loans?type=history -> osobna lista ze zwrotem" "$ok"
 
+echo "-- REQ-H4..H12 (MUTUJE stan: składa i anuluje jedno zamówienie) --"
+HOLD_AUTH=(-H "Authorization: Bearer $TOKEN")
+HOLD_ITEM="MOCK-ITEM-MOCK-SEARCH-A1-1"
+HOLD_URL="$BASE_URL/primaws/rest/priv/ILSServices/itemServices/MOCK-SEARCH-A1/item/$HOLD_ITEM/PS-MOCK-SEARCH-A1/AlmaItemRequest"
+hold_count() {
+    curl -sS "$BASE_URL/primaws/rest/priv/myaccount/requests?lang=pl" "${HOLD_AUTH[@]}" |
+        python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print(len(d), len(d['holds']['hold']))"
+}
+ok=$(read -r cats before <<<"$(hold_count)"; [ "$cats" = "6" ] && echo True || echo "kategorii: $cats")
+check_true "GET /requests -> 6 kategorii (REQ-H4)" "$ok"
+read -r _ before <<<"$(hold_count)"
+code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE_URL/primaws/rest/priv/myaccount/requests?lang=pl")
+check_status "GET /requests bez tokena -> 401" 401 "$code"
+ok=$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/requests" -H "Authorization: Bearer $GUEST_TOKEN" |
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status'] == 'failed' and d['reply-code'] == '0002')" 2>/dev/null || echo "inna odpowiedź")
+check_true "GET /requests tokenem gościa -> 200 + reply-code 0002" "$ok"
+ok=$(curl -sS "$HOLD_URL?lang=pl" "${HOLD_AUTH[@]}" | python3 -c "
+import json, sys
+keys = [p['key'] for p in json.load(sys.stdin)['services-arr']['services'][0]['groups-list-map'][0]['pickupLocation']]
+print(len(keys) >= 1 and all(len(k.split('\$\$')) == 2 for k in keys))" 2>/dev/null || echo "błąd parsowania")
+check_true "GET formularz -> klucze <id>\$\$<TYPE> (REQ-H10a)" "$ok"
+place_body() { echo "{\"requestType\":\"hold\",\"pickupLocation\":\"$1\",\"materialType\":\"BOOK\",\"itemId\":\"$HOLD_ITEM\",\"group_id\":\"MOCK-SEARCH-A1\",\"pickupLibraryId\":\"$1\",\"pickupType\":\"LIBRARY\"}"; }
+code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$HOLD_URL?lang=pl" "${HOLD_AUTH[@]}" \
+    -H "Content-Type: application/json" -d "$(place_body ZLE-MIEJSCE)")
+check_status "POST zamówienie ze złym miejscem odbioru -> 400" 400 "$code"
+ok=$(curl -sS -X POST "$HOLD_URL?lang=pl" "${HOLD_AUTH[@]}" -H "Content-Type: application/json" -d "$(place_body MOCKLIB-FD1)" |
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status'] == 'ok' and 'requestid' not in d)" 2>/dev/null || echo "inna odpowiedź")
+check_true "POST zamówienie -> koperta ok bez requestid (REQ-H10b)" "$ok"
+read -r _ after <<<"$(hold_count)"
+ok=$([ "$after" -gt "$before" ] || [ "$after" = "5" ] && echo True || echo "przed=$before po=$after")
+check_true "zamówienie widoczne w /requests (REQ-H10b, limit 5)" "$ok"
+ok=$(curl -sS "$BASE_URL/primaws/rest/priv/ILSServices/itemQueue/$HOLD_ITEM?lang=pl" "${HOLD_AUTH[@]}" |
+    python3 -c "import json,sys,re; print(bool(re.fullmatch(r'\(zamówienie: [1-9]\d*\)', json.load(sys.stdin)['itemQueueString'])))" 2>/dev/null || echo "inna odpowiedź")
+check_true "GET itemQueue -> \"(zamówienie: N)\", N >= 1 (REQ-H12)" "$ok"
+HOLD_ID=$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/requests?lang=pl" "${HOLD_AUTH[@]}" |
+    python3 -c "import json,sys; print([h['requestid'] for h in json.load(sys.stdin)['data']['holds']['hold'] if h['mmsid'] == 'MOCK-SEARCH-A1'][-1])")
+curl -sS -o /dev/null -X POST "$BASE_URL/primaws/rest/priv/myaccount/cancel_requests?lang=pl" "${HOLD_AUTH[@]}" \
+    -H "Content-Type: application/json" -d "{\"request_id\":\"$HOLD_ID\",\"request_type\":\"hold\"}"
+read -r _ same <<<"$(hold_count)"
+ok=$([ "$same" = "$after" ] && echo True || echo "request_type=hold zmienił stan ($after -> $same)")
+check_true "cancel_requests z \"hold\" (l. pojedyncza) -> bez zmiany (REQ-H11)" "$ok"
+ok=$(curl -sS -X POST "$BASE_URL/primaws/rest/priv/myaccount/cancel_requests?lang=pl" "${HOLD_AUTH[@]}" \
+    -H "Content-Type: application/json" -d "{\"request_id\":\"$HOLD_ID\",\"request_type\":\"holds\"}" |
+    python3 -c "import json,sys; d=json.load(sys.stdin); print(d['reply-code'] == '0000' and d['data']['holds']['hold'][0]['requestid'] == '$HOLD_ID')" 2>/dev/null || echo "inna odpowiedź")
+check_true "cancel_requests z \"holds\" -> koperta 0000 (REQ-H11)" "$ok"
+read -r _ final <<<"$(hold_count)"
+ok=$([ "$final" = "$before" ] || [ "$final" -lt "$after" ] && echo True || echo "po anulowaniu: $final")
+check_true "zamówienie zniknęło po anulowaniu" "$ok"
+
+echo "-- REQ-H7 / REQ-H8 --"
+ok=$([ "$(count_docs "any,contains,MOCK-SEARCH-A1")" = "1" ] && echo True || echo "inna liczba rekordów")
+check_true "GET /pnxs po samym MMS id -> dokładnie 1 rekord" "$ok"
+ok=$(curl -sS "$BASE_URL/primaws/rest/pub/getPhysicalService/MOCK-SEARCH-A1" |
+    python3 -c "import json,sys; print(json.load(sys.stdin)['physicalServiceId'] == 'PS-MOCK-SEARCH-A1')" 2>/dev/null || echo "brak")
+check_true "getPhysicalService także dla edycji dostępnej" "$ok"
+
 echo
 echo "=== Podsumowanie: $PASS PASS, $FAIL FAIL ==="
 [ "$FAIL" -eq 0 ]

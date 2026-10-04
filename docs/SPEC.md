@@ -22,8 +22,9 @@ Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b), Layer
 REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) oraz anonimowe wyszukiwanie tokenem gościa i wyszukiwanie po
 autorze (REQ-G1..REQ-G5), a także wyszukiwanie po serii i rekord `pnxs/L/alma{mmsid}` (REQ-G6) są
 zaimplementowane i muszą działać. Do tego pełny kształt wypożyczeń dla okna „Szczegóły” w omnis-mobile
-i osobna historia wypożyczeń (REQ-L1..REQ-L5). `/fines`, `/requests` i pokrewne pozostają poza zakresem — patrz „Poza
-zakresem” niżej.
+i osobna historia wypożyczeń (REQ-L1..REQ-L5). Zamówienia (podgląd `/requests`, składanie, anulowanie — REQ-H1..REQ-H12) są wyspecyfikowane, ale
+jeszcze **nie zaimplementowane** (`docs/PLAN.md` Faza 6). `/fines` i pokrewne pozostają poza zakresem — patrz
+„Poza zakresem” niżej.
 
 ### Konto demo
 
@@ -326,6 +327,191 @@ Wywołanie aplikacji: `?isGuest=true&lang=pl&targetUrl=<dowolny URL>&viewId=MOCK
   []}`, **bez `pnx`**. Tak odpowiada prawdziwe Primo, **nie** `404`. `omnis-mobile` zapisuje to jako
   „sprawdzone, bez serii” i nie ponawia zapytania.
 
+### Zamówienia (rezerwacje): podgląd, składanie, anulowanie — REQ-H1..REQ-H12 (do zaimplementowania, `docs/PLAN.md` Faza 6)
+
+Źródło prawdy: `omnis-py` ≥ v0.2.14 (`get_requests()`, `cancel_hold()`, `get_holdable_items()`,
+`get_hold_options()`, `place_hold()`, `get_item_queue()` w `src/omnis/client.py` i opis przepływu w
+`omnis-py/CLAUDE.md`). Kształty poniżej przechwycono z przeglądarki na prawdziwym Primo
+(`omnis-py/curls/zamowienie`, `omnis-py/curls/anulowanie`, oba lokalne i gitignorowane) i sprawdzono
+odczytami na żywym API 2026-10-04. Wyjątki są oznaczone jako **niezweryfikowane**.
+
+Prawdziwy klient składa zamówienie w czterech krokach. Mock musi obsłużyć wszystkie, bo `omnis-py`
+wywołuje je po kolei:
+
+```
+pnxs?q=any,contains,<mmsid>  →  delivery (te same parametry)  →  getPhysicalService/<mmsid>
+  →  ILSServices/holdings/<psid> (raz na filię; items[].listofservices → link-to-service)
+  →  GET  <link-to-service>  (formularz: miejsca odbioru, typ materiału)
+  →  POST <link-to-service>  (złożenie)
+  →  GET  ILSServices/itemQueue/<itemId>
+```
+
+#### Stan zamówień (dotyczy REQ-H1..REQ-H12)
+
+Konto demo jest **publiczne i współdzielone**. Każdy, kto zna `demo`/`demo1234`, widzi te same
+zamówienia, inaczej niż przy prolongacie, gdzie jedyną zmianą stanu jest przesunięty termin. Stan per
+token odpada: `omnis-cli` loguje się od nowa przy każdym uruchomieniu, więc zamówienie złożone w jednym
+wywołaniu znikałoby przed `--requests` w następnym. Dlatego:
+
+- **REQ-H1**: stan zamówień jest modułowy, w pamięci procesu, tak jak `_renewal_extensions`. Restart
+  resetuje go do fixture'u.
+- **REQ-H2 (ochrona przed nadużyciem)**: twardy limit **5 aktywnych zamówień**. Złożenie szóstego usuwa
+  najstarsze **złożone przez użytkownika**. Seedowanego (REQ-H3) nigdy nie usuwa, ale anulowanie
+  przez `cancel_requests` działa normalnie. Do tego TTL **24 h** liczony od `requestdate`/czasu złożenia;
+  przeterminowane zamówienia znikają przy najbliższym odczycie. Seedowanego (REQ-H3) TTL nie dotyczy: jego
+  `requestdate` jest liczony względem `date.today()`, więc nie starzeje się. Bez tych ograniczeń publiczny endpoint
+  przyjmujący zapisy rośnie w nieskończoność.
+- **REQ-H3**: fixture startuje z **jednym** seedowanym zamówieniem w stanie „gotowe do odbioru”
+  (`available: "Y"`), żeby ekran zamówień w `omnis-mobile`/`omnis-cli --requests` nie był pusty od razu po
+  starcie. Tytuł ma być fikcyjny, z katalogu `search_data.py`, nie z wypożyczeń.
+
+#### 12. `GET /primaws/rest/priv/myaccount/requests?lang=pl`
+
+Autoryzacja jak w REQ-5/REQ-G3 (`_require_patron`).
+
+- **REQ-H4**: `200` z **sześcioma** kategoriami, zawsze wszystkimi, także pustymi:
+  ```json
+  {"data": {
+    "holds": {"hold": [ ... ]},
+    "photocopies": {"photocopy": []},
+    "bookings": {"booking": []},
+    "cdls": {"cdl": []},
+    "ills": {"ill": []},
+    "acqs": {"acq": []}
+  }}
+  ```
+  Pozostałe pięć kategorii zawsze puste: ich kształt elementu nigdy nie był widziany na żywo.
+- **REQ-H5**: pojedynczy `hold` ma dokładnie te pola (zaobserwowane na żywo, wszystkie jako stringi):
+  ```json
+  {
+    "requestid": "MOCK-REQ-0001",
+    "title": "Cienie Nibylandii / Karolina Nibylska.",
+    "author": "Nibylska, Karolina",
+    "holdstatus": "W realizacji",
+    "available": "N",
+    "cancel": "Y",
+    "pickuplocationname": "Filia Testowa 1",
+    "requestdate": "20261004",
+    "mmsid": "MOCK-SEARCH-A1",
+    "ilsinstitutionname": "Nieoficjalna Biblioteka OMNIS (Demo)",
+    "ilsinstitutioncode": "MOCK"
+  }
+  ```
+  - **Pułapka (typ)**: `available`/`cancel` to `"Y"`/`"N"`, **nie** bool. `omnis-py`'s `Hold.from_api()`
+    porównuje z `"Y"`.
+  - `requestdate` ma format `YYYYMMDD`, liczony względem `date.today()` (zasada z „Dane demo”).
+  - `holdstatus` to tekst po polsku, nie enum. Prawdziwe wartości: `"W realizacji"` (świeżo złożone,
+    `available: "N"`) i `"Na półce rezerwacji do dd/mm/rrrr"` (gotowe do odbioru, `available: "Y"`, data
+    = dziś + 7 dni). Proponowana symulacja: zamówienie złożone przez POST (REQ-H10) startuje jako
+    `"W realizacji"`. Seed z REQ-H3 jest od razu `"Na półce rezerwacji do …"`.
+  - `mmsid` w prawdziwym API bywa id **strefy sieciowej** (inny niż lokalny, z `ilsinstitutioncode:
+    "48OMNIS_NETWORK"`). Mock może zwracać id lokalne. Ważne tylko, żeby `pnxs` znajdował rekord po tym id
+    (REQ-H7).
+- **REQ-H6**: `counters` (REQ-6) — `Requests.value` = liczba aktywnych zamówień jako string (`"1"`),
+  spójna z REQ-H4 po każdym złożeniu/anulowaniu.
+
+#### 13. `POST /primaws/rest/priv/myaccount/cancel_requests?lang=pl`
+
+Body: `{"request_id": "<requestid>", "request_type": "holds"}`.
+
+- **REQ-H11 (pułapka)**: `request_type` to **`"holds"`** (liczba mnoga, klucz kategorii), nie `"hold"`.
+  Mock ma wymagać dokładnie tej wartości. Każda inna to `200` bez zmiany stanu, jak REQ-13b.
+- Znany `request_id` → `200`, zamówienie znika z REQ-H4, `Requests` w REQ-H6 maleje, kolejka z REQ-H12
+  maleje. Zmiana jest widoczna od razu (na żywo, inaczej niż przy składaniu). Nieznany id → `200` no-op
+  (jak REQ-13b). **Odpowiedź sukcesu (zweryfikowana na żywo 2026-10-04)**:
+  ```json
+  {"beaconO22": "646", "status": "ok", "reply-code": "0000", "reply-text": "OK",
+   "data": {"holds": {"hold": [{"requestid": "<anulowany requestid>", "note": {"type": "info"}}]}}}
+  ```
+  `omnis-py` od v0.2.14 rzuca `ValueError`, jeśli `reply-code` ≠ `"0000"` albo `status: "failed"`, więc mock
+  nie może tu zwracać innej koperty.
+
+#### Rozszerzenia istniejących endpointów Layer 2 (wymagane przez przepływ zamówienia)
+
+- **REQ-H7**: `pnxs` (REQ-15) z `q=any,contains,<mmsid>` (sam MMS id, bez prefiksu `alma`) zwraca
+  **dokładnie ten jeden** rekord, a `delivery` (REQ-17) wywołane z tymi samymi parametrami zwraca jego
+  `holding` z `holKey`. `omnis-py` odrzuca wynik, gdy wyszukiwanie po id zwraca kilka rekordów bez
+  dokładnego dopasowania.
+- **REQ-H8**: `getPhysicalService` (REQ-18) zwraca `physicalServiceId` dla **każdej** edycji z katalogu,
+  nie tylko niedostępnej: w prawdziwym Primo zamówić można też egzemplarz dostępny na półce.
+- **REQ-H9**: `ILSServices/holdings` (REQ-18b; pułapka z `holKey` zostaje bez zmian) zwraca dla każdej
+  filii pełny element `items[]`, nie tylko `itemstatusname`. Pola, które czyta `omnis-py`:
+  ```json
+  {
+    "itemid": "MOCK-ITEM-A1-F1",
+    "mmsid": "MOCK-SEARCH-A1",
+    "itembarcode": "MOCKBC0001",
+    "itemstatusname": "Egzemplarz na półce",
+    "itemcategoryname": "30 Days Loan",
+    "itempolicy": "Wypożyczane na 30 dni",
+    "itemmaterial": "Książka",
+    "callnumber2": "821.162.1-3",
+    "mainlocationname": "Filia Testowa 1",
+    "secondarylocationname": "ul. Przykładowa 1",
+    "listofservices": {"service": [{
+      "type": "AlmaItemRequest",
+      "allowed": "Y",
+      "service-type": "OvP",
+      "enableWithoutLogin": false,
+      "link-to-service": "/primaws/rest/priv/ILSServices/itemServices/MOCK-SEARCH-A1/item/MOCK-ITEM-A1-F1/PS-MOCK-SEARCH-A1/AlmaItemRequest?institution=MOCK&hasHold=true&hasBooking=false"
+    }]}
+  }
+  ```
+  Element `locations[]` dostaje też `"main-location"`/`"sub-location"`. Co najmniej jeden egzemplarz w
+  katalogu powinien mieć `"allowed": "N"`, żeby była pokryta ścieżka „nie można zamówić”. Wypożyczone
+  egzemplarze dalej niosą datę w `itemstatusname` (REQ-18b), a `allowed: "Y"`: w prawdziwym Primo można
+  zamówić książkę, która jest wypożyczona, i trafia się wtedy do kolejki.
+  `link-to-service` musi zgadzać się z trasą z endpointu 14 niżej, bo `omnis-py` używa go dosłownie, bez
+  przebudowy ścieżki.
+
+#### 14. `GET|POST /primaws/rest/priv/ILSServices/itemServices/{mmsid}/item/{itemId}/{psid}/AlmaItemRequest`
+
+Query: `institution`, `hasHold`, `hasBooking`, `lang` (plus przy GET: `itemcategoryname`, `itemid`,
+`itemstatusname`, `mainlocationname`, `secondarylocationname`, `vid` — mock może je ignorować).
+Autoryzacja: wymaga tokena z logowania, inaczej `401`. Zachowanie prawdziwego Primo przy tokenie gościa
+nie jest zweryfikowane, więc `401` to założenie mocka.
+
+- **REQ-H10a (GET, formularz)**: `200`:
+  ```json
+  {"services-arr": {"services": [{
+    "itemId": "MOCK-ITEM-A1-F1",
+    "type-name": "AlmaRequest",
+    "requestType": [{"key": "hold", "value": "almaRequest.requestType.hold"}],
+    "groups-list-map": [{
+      "requestType": "hold",
+      "materialType": {"key": "BOOK", "value": "Książka"},
+      "pickupLocation": [{"key": "MOCKLIB1$$LIBRARY", "value": "Filia Testowa 1",
+                          "category": "Proszę wybrać miejsce odbioru", "userAffiliatedCampus": false}],
+      "termsOfUse": [{"key": "--", "value": "--"}]
+    }],
+    "chosen-parameters-map": {"pickupInstitution": "MOCK"}
+  }]}, "info-notes": []}
+  ```
+  - **Pułapka**: `pickupLocation[].key` ma format **`"<libraryId>$$<TYPE>"`**. `omnis-py` rozdziela go
+    po `$$` i rzuca `ValueError` przy każdym innym formacie. W prawdziwym BRACZ jedyne miejsce odbioru to
+    filia, która ma egzemplarz. Mock może dla jednej filii zwracać **dwa** miejsca odbioru, żeby pokryć
+    ścieżkę wyboru `--pickup` w CLI.
+- **REQ-H10b (POST, złożenie)**: body (dokładnie to wysyła `omnis-py`, tak jak przeglądarka):
+  ```json
+  {"requestType": "hold", "pickupLocation": "MOCKLIB1", "materialType": "BOOK", "itemId": "MOCK-ITEM-A1-F1",
+   "group_id": "MOCK-SEARCH-A1", "pickupLibraryId": "MOCKLIB1", "pickupType": "LIBRARY"}
+  ```
+  → `200`, nowe zamówienie w REQ-H4 (`requestid` unikalny, `holdstatus: "W realizacji"`,
+  `pickuplocationname` = nazwa wybranego miejsca), `Requests` +1, kolejka REQ-H12 +1. Walidacja:
+  `pickupLocation` spoza formularza albo nieznany `itemId` → `400`. Prawdziwy kod błędu nie jest znany;
+  `omnis-py` i tak zamieni każdy status ≠ 2xx na wyjątek. **Odpowiedź sukcesu (zweryfikowana na żywo
+  2026-10-04)**: dokładnie `{"beaconO22": "<liczba jako string>", "reply-text": "ok", "status": "ok"}`, **bez**
+  `requestid`. Na prawdziwym Primo nowe zamówienie pojawia się w REQ-H4 dopiero po kilku sekundach, a
+  `itemQueue` (REQ-H12) od razu. Mock nie musi symulować opóźnienia, `omnis-py` i tak ponawia odczyt.
+  Błąd: HTTP `200` z kopertą `{"status": "failed", "reply-code": "<≠0000>", "reply-text": ...}` (jak
+  REQ-G3), którą `omnis-py` zamienia na `ValueError`. Wariant z `400` też jest akceptowalny.
+
+#### 15. `GET /primaws/rest/priv/ILSServices/itemQueue/{itemId}?record-institution=&lang=pl`
+
+- **REQ-H12**: `200` z `{"itemId": "<itemId>", "itemQueueString": "(zamówienie: N)"}`, gdzie `N` to liczba
+  aktywnych zamówień na ten egzemplarz. Tekst po polsku, dokładnie w tym formacie (zaobserwowany na żywo).
+
+
 ## Endpointy pomocnicze (poza kontraktem Primo)
 
 Nie są częścią API, którego oczekuje `OmnisClient`/`omnis-mobile` — nie testuje ich `tests/test_contract.py`
@@ -355,8 +541,8 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
   (przecinek jako separator dziesiętny + sufiks waluty), parsowany przez `omnis-py`'s `_parse_fine_amount()`.
   To jest **REQ-format-kontrastowy** do REQ-7 wyżej — jeśli kiedyś implementujesz `/fines`, NIE używaj tam
   formatu z kropką.
-- `/primaws/rest/priv/myaccount/requests`, `/primaws/rest/priv/myaccount/personal_settings`,
-  `/primaws/rest/priv/myaccount/cancel_requests`.
+- `/primaws/rest/priv/myaccount/personal_settings`. (`/requests` i `cancel_requests` przeniesione do
+  REQ-H1..REQ-H12.)
 
 ## Dane demo (fixture)
 

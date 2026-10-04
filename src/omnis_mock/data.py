@@ -3,8 +3,10 @@
 Zaimplementowane w Fazie 1 (docs/PLAN.md). Tytuły z domeny publicznej (polska klasyka) — patrz SPEC.md.
 """
 
+import itertools
 import os
-from datetime import date, timedelta
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 DEMO_USERNAME = os.environ.get("DEMO_USERNAME", "demo")
@@ -206,6 +208,134 @@ LOAN_EDITION_YEAR = "2000"
 _renewal_extensions: dict[str, int] = {}
 
 
+# --- Zamówienia (SPEC.md REQ-H1..REQ-H3, REQ-H6) -------------------------------------------------------------
+# Stan modułowy, w pamięci procesu (REQ-H1): konto demo jest publiczne i współdzielone, więc zamówienie
+# złożone przez jednego klienta widzi każdy. Leniwa inicjalizacja (`_holds is None`), bo tytuł seeda
+# pochodzi z katalogu (`search_data`), który importuje ten moduł — import wprost byłby cykliczny.
+
+MAX_ACTIVE_HOLDS = 5  # REQ-H2: twardy limit aktywnych zamówień (razem z seedem)
+HOLD_TTL = timedelta(hours=24)  # REQ-H2: TTL zamówień złożonych przez użytkownika (seed bez TTL)
+_SEED_READY_DAYS = 7  # REQ-H5: „Na półce rezerwacji do” = dziś + 7 dni
+_STATUS_IN_PROGRESS = "W realizacji"
+
+_SEED_MMSID = "MOCK-SEARCH-B1"  # edycja z katalogu, nie z wypożyczeń (REQ-H3)
+
+_clock: Callable[[], datetime] = datetime.now
+_holds: Optional[list[dict[str, Any]]] = None
+_hold_counter = itertools.count(1)
+
+
+def set_clock(clock: Optional[Callable[[], datetime]]) -> None:
+    """Wstrzykiwalny zegar dla TTL zamówień (testy bez `sleep`); `None` przywraca `datetime.now`."""
+    global _clock
+    _clock = clock or datetime.now
+
+
+def _next_request_id() -> str:
+    return f"MOCK-REQ-{next(_hold_counter):04d}"
+
+
+def _init_holds() -> list[dict[str, Any]]:
+    """Fixture startowy (REQ-H3): jedno zamówienie „gotowe do odbioru”, fikcyjny tytuł z katalogu."""
+    from omnis_mock import search_data  # lokalnie: search_data importuje data (cykl)
+
+    info = search_data.catalog_hold_info(_SEED_MMSID)
+    assert info is not None
+    return [
+        {
+            "requestid": _next_request_id(),
+            "mmsid": info["mmsid"],
+            "item_id": info["item_id"],
+            "title": info["title"],
+            "author": info["author"],
+            "pickup_name": info["pickups"][0]["name"],
+            "created": _clock(),
+            "seed": True,
+        }
+    ]
+
+
+def _active_holds() -> list[dict[str, Any]]:
+    """Aktualna lista zamówień po usunięciu przeterminowanych (REQ-H2: TTL liczony od złożenia, przy
+    najbliższym odczycie). Seed nie podlega TTL."""
+    global _holds
+    if _holds is None:
+        _holds = _init_holds()
+    now = _clock()
+    _holds[:] = [h for h in _holds if h["seed"] or now - h["created"] < HOLD_TTL]
+    return _holds
+
+
+def place_demo_hold(mmsid: str, item_id: str, title: str, author: str, pickup_name: str) -> str:
+    """REQ-H10b: dodaje zamówienie („W realizacji”), zwraca nowy `requestid`. Po przekroczeniu limitu
+    (REQ-H2) usuwa najstarsze zamówienia złożone przez użytkownika; seed zostaje."""
+    holds = _active_holds()
+    request_id = _next_request_id()
+    holds.append(
+        {
+            "requestid": request_id,
+            "mmsid": mmsid,
+            "item_id": item_id,
+            "title": title,
+            "author": author,
+            "pickup_name": pickup_name,
+            "created": _clock(),
+            "seed": False,
+        }
+    )
+    while len(holds) > MAX_ACTIVE_HOLDS:
+        oldest = min((h for h in holds if not h["seed"]), key=lambda h: h["created"], default=None)
+        if oldest is None:
+            break
+        holds.remove(oldest)
+    return request_id
+
+
+def cancel_demo_hold(request_id: str) -> bool:
+    """REQ-H11: usuwa zamówienie (seed także). Nieznany id -> False (no-op)."""
+    holds = _active_holds()
+    for hold in holds:
+        if hold["requestid"] == request_id:
+            holds.remove(hold)
+            return True
+    return False
+
+
+def hold_queue_length(item_id: str) -> int:
+    """REQ-H12: liczba aktywnych zamówień na egzemplarz."""
+    return sum(1 for h in _active_holds() if h["item_id"] == item_id)
+
+
+def get_demo_holds() -> list[dict[str, str]]:
+    """`data.holds.hold` dla `GET /myaccount/requests` (REQ-H5): same stringi, `available`/`cancel` jako
+    `"Y"`/`"N"` (nie bool). Seed jest od razu na półce (`available: "Y"`), reszta „W realizacji”."""
+    now = _clock()
+    result = []
+    for hold in _active_holds():
+        if hold["seed"]:
+            ready_until = (now.date() + timedelta(days=_SEED_READY_DAYS)).strftime("%d/%m/%Y")
+            status, available = f"Na półce rezerwacji do {ready_until}", "Y"
+        else:
+            status, available = _STATUS_IN_PROGRESS, "N"
+        result.append(
+            {
+                "requestid": hold["requestid"],
+                "title": hold["title"],
+                "author": hold["author"],
+                "holdstatus": status,
+                "available": available,
+                "cancel": "Y",
+                "pickuplocationname": hold["pickup_name"],
+                # Seed liczony od dziś, żeby się nie starzał (REQ-H2/H3); reszta od czasu złożenia.
+                "requestdate": _format_date((now if hold["seed"] else hold["created"]).date()),
+                "mmsid": hold["mmsid"],
+                "ilsinstitutionname": _INSTITUTION_NAME,
+                "ilsinstitutioncode": _INSTITUTION_CODE,
+            }
+        )
+    return result
+
+
 def _format_date(value: date) -> str:
     return value.strftime("%Y%m%d")
 
@@ -239,7 +369,7 @@ def get_demo_counters() -> list[dict[str, str]]:
     loans = get_demo_loans()
     return [
         {"type": "Loans", "value": str(len(loans))},
-        {"type": "Requests", "value": "0"},
+        {"type": "Requests", "value": str(len(_active_holds()))},  # REQ-H6
         {"type": "Fines", "value": "0.00"},
     ]
 
@@ -334,8 +464,12 @@ def renew_demo_loan(loan_id: str) -> bool:
 
 
 def reset_state() -> None:
-    """Resetuje prolongaty do stanu początkowego (używane przez tests/test_contract.py)."""
+    """Resetuje prolongaty i zamówienia (z powrotem do seeda) oraz zegar (używane przez testy)."""
+    global _holds, _hold_counter
     _renewal_extensions.clear()
+    _holds = None
+    _hold_counter = itertools.count(1)
+    set_clock(None)
 
 
 def check_credentials(username: str, password: str) -> Optional[dict[str, str]]:

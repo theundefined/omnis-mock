@@ -151,3 +151,53 @@ _(nie realizowana w tej sesji)_
 - Testy: `pytest` 48/48 (nowy `tests/test_loan_details.py`, w tym `omnis-py` `get_loans("history")`),
   `ruff`/`black` czyste. `run_all.sh` lokalnie uruchomiony 3 razy pod rząd na tej samej instancji: 35/35
   za każdym razem, a trzeci przebieg przeszedł gałęzią „na limicie”.
+
+## Faza 6 — zamówienia (REQ-H1..REQ-H12)
+
+SPEC był w większości jednoznaczny. Co zrobione:
+
+- `data.py`: stan zamówień modułowy z leniwą inicjalizacją (seed bierze tytuł z katalogu przez import lokalny,
+  bo `search_data` importuje `data`). Wstrzykiwalny zegar `set_clock()`, `reset_state()` czyści też zamówienia,
+  licznik `requestid` i zegar. `Requests` w `counters` liczone ze stanu.
+- `search_data.py`: egzemplarze generowane deterministycznie (`MOCK-ITEM-<mmsid>-<n>`, `MOCKBC####`), jeden na
+  edycję, plus drugi egzemplarz A1 w czytelni z `allowed: "N"`. Filia Demo 1 ma dwa miejsca odbioru
+  (`MOCKLIB-FD1`, `MOCKLIB-FD1C`). `holding_status()` zastąpione przez `holding_items()` (nadal tylko z
+  `holKey`, REQ-18b).
+- `main.py`: trasy 12-15. Zdjęto ograniczenie REQ-18 „tylko niedostępne”: `getPhysicalService` odpowiada dla
+  każdej edycji (REQ-H8).
+
+Decyzje i odstępstwa:
+
+- Limit 5 (REQ-H2) obejmuje seed: po złożeniu zamówienia przy 6 aktywnych wypada najstarsze złożone przez
+  użytkownika, więc przy żywym seedzie użytkownik ma miejsce na 4. SPEC mówi o „5 aktywnych”, a `Requests` liczy
+  seed, więc przyjąłem spójnie. Alternatywa (5 użytkownika + seed) to jedna stała w `MAX_ACTIVE_HOLDS`.
+- `tests/test_guest_search.py::test_ils_holdings_works_without_authorization_header` sprawdzał
+  `items == [{"itemstatusname": ...}]`, co przeczy REQ-H9 (pełny element). Poluzowałem asercję do
+  `len(items) == 1` + `items[0]["itemstatusname"]`. To nie jest `test_contract.py`, ale to zmiana testu QA, do
+  sprawdzenia.
+- `cancel_requests` dla nieznanego id albo `request_type` ≠ `"holds"`: 200 z tą samą kopertą sukcesu i PUSTĄ
+  listą `holds.hold`, bez zmiany stanu (SPEC mówi tylko „200 no-op”). Dzięki temu `omnis-py` nie rzuca.
+- `itemQueue`: wymaga tokena z logowania (spójnie z `itemServices`, gość/brak -> 401), nieznany `itemId` -> 404.
+- `GET` formularza i `POST` dla egzemplarza `allowed: "N"` -> 400 (SPEC nie precyzuje). `POST` waliduje też
+  `requestType == "hold"`; `pickupLibraryId`, jeśli jest, musi równać się `pickupLocation`. `materialType` i
+  `group_id` są ignorowane.
+- REQ-H7: samo MMS id (z prefiksem `alma` lub bez) dopasowywane jest jako CAŁE wyrażenie do znanego mmsid, więc
+  zwraca dokładnie jedną edycję (nie reprezentanta dzieła), a `A1` nie łapie `A10`. Inne zapytania działają jak
+  dotąd.
+- Seed: `MOCK-REQ-0001`, edycja `MOCK-SEARCH-B1`, odbiór Filia Demo 3. Jego `requestdate` i data „na półce do”
+  liczone względem zegaru na bieżąco (nie starzeje się). Zamówienia użytkownika: `requestdate` z czasu złożenia.
+- Mock dodaje zamówienie od razu (bez opóźnienia z prawdziwego Primo).
+
+Testy: nowy `tests/test_holds_contract.py` (stan resetowany autouse). Testy pełnego przepływu przez
+`get_holdable_items`/`place_hold` są pomijane (`hasattr(OmnisClient, "place_hold")`) na `omnis-py` z PyPI.
+Uruchomienie przepływu lokalnie:
+
+```bash
+.venv/bin/pip install -e ../omnis-py     # tymczasowo, bez zmiany pyproject.toml
+.venv/bin/python -m pytest -q            # 68 passed
+.venv/bin/pip install "omnis-py==0.2.11" # powrót do stanu wyjściowego
+.venv/bin/python -m pytest -q            # 66 passed, 2 skipped
+```
+
+`scripts/curl/21_holds.sh` i sekcja REQ-H w `run_all.sh` (48/48 lokalnie, dwa przebiegi pod rząd) mutują stan:
+składają i anulują jedno zamówienie.

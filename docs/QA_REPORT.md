@@ -598,3 +598,89 @@ kod kategorii egzemplarza (metadane biblioteczne, nie dane osobowe/identyfikują
       danych osobowych/prawdziwych identyfikatorów w diffie. Jedyne znalezisko to niebronująca,
       informacyjna niekompletność jednego akapitu dokumentacji (patrz wyżej). Gotowe do Fazy 4 (deploy).
 - [ ] **FAIL** — lista blokujących REQ do zwrotu developerowi: _(brak)_
+
+---
+
+## Faza 6 — zamówienia (REQ-H1..REQ-H12)
+
+Data: 2026-10-04. Zakres: niezacommitowany diff + `tests/test_holds_contract.py` + `scripts/curl/21_holds.sh`.
+Kontrakt: `docs/SPEC.md` (sekcja „Zamówienia”) i `docs/PLAN.md` Faza 6. Sekcję zapisał orkiestrator z raportu
+roli `qa`, która nie ma `Write`/`Edit`.
+
+### Przebiegi pytest (`.venv`)
+
+| Przebieg | Wynik |
+|---|---|
+| 1. `omnis-py==0.2.11` (PyPI) | 66 passed, 2 skipped. Pominięte: `test_full_hold_flow_via_real_client` i `test_holdable_items_for_loaned_edition_and_branch_filter` (brak `place_hold`). Layer 1/2/G/L zielone, czyli brak regresji dla `omnis-android`/`omnis-ha`. |
+| 2. `pip install -e ../omnis-py` | 68 passed, 0 skipped. Pełny przepływ prawdziwym `OmnisClient` zielony. |
+| Przywrócenie `omnis-py==0.2.11` | 66 passed, 2 skipped. |
+
+`ruff check src` i `black --check src` czyste.
+
+### Weryfikacja ręczna
+
+- `scripts/curl/run_all.sh` dwa razy pod rząd na tej samej instancji: 48 PASS / 0 FAIL za każdym razem. Po obu
+  przebiegach na liście zostaje tylko seed.
+- Token gościa:
+  - `myaccount/requests` i `cancel_requests` → `200`, `status: failed`, `reply-code: 0002`.
+  - `itemServices` (GET i POST) oraz `itemQueue` → `401`; to samo bez tokena.
+- Wszystkie 8 edycji katalogu:
+  - `getPhysicalService` → `200`.
+  - `holdings` bez `holKey` → pusta lista, z `holKey` → pełne `items[]`.
+  - Każdy `link-to-service` → `200` dla `allowed: "Y"`, `400` dla `"N"`.
+  - Klucze `pickupLocation` mają format `<id>$$<TYPE>`.
+- `pnxs?q=any,contains,<mmsid>` (z prefiksem `alma` i bez) zwraca dokładnie 1 rekord. Prefiks nie łapie innych
+  rekordów.
+- Limit i TTL (wstrzyknięty zegar oraz curl):
+  - Po 7 POST-ach zostaje seed + 4 zamówienia użytkownika; najstarsze wypadają pierwsze.
+  - TTL: 23 h 59 min → zamówienie zostaje, 24 h 01 min → znika.
+  - Seed po 30 dniach nadal jest, a jego daty przesuwają się razem z zegarem.
+  - Seed da się anulować; ponowne anulowanie to no-op.
+- `counters` `Requests` zgadza się ze stanem po każdym złożeniu i anulowaniu.
+
+### Tabela REQ
+
+| REQ | Wynik |
+|---|---|
+| H1 stan modułowy | PASS |
+| H2 limit 5 / TTL 24 h / seed | PASS (uwaga a) |
+| H3 seed „Na półce rezerwacji do …”, tytuł z katalogu | PASS |
+| H4 sześć kategorii | PASS |
+| H5 pola `hold`, same stringi, `"Y"`/`"N"` | PASS |
+| H6 `Requests` w counters | PASS |
+| H7 `pnxs` po mmsid → 1 rekord | PASS |
+| H8 `getPhysicalService` dla każdej edycji | PASS (8/8) |
+| H9 pełne `items[]`, `link-to-service` zgodny z trasą 14 | PASS |
+| H10a formularz, `<id>$$<TYPE>`, dwa miejsca odbioru | PASS |
+| H10b POST, koperta bez `requestid`, walidacja 400 | PASS |
+| H11 tylko `"holds"` | PASS |
+| H12 `itemQueue` | PASS |
+| Regresja REQ-18b (`holKey`) | PASS |
+| Regresja REQ-G2 / REQ-G3 | PASS |
+
+### Decyzje developera (z DEV_NOTES), ocena QA
+
+- (a) Limit 5 liczy też seed, więc użytkownik ma 4 miejsca. Akceptowalne i spójne z `Requests`. Warto doprecyzować to w SPEC.
+- (b) Poluzowana asercja w `tests/test_guest_search.py::test_ils_holdings_works_without_authorization_header`.
+  Uzasadniona przez REQ-H9 i nie osłabia sprawdzenia REQ-G2.
+- (c) No-op cancel → 200 z kopertą sukcesu i pustą listą. Zgodne ze SPEC.
+- (d) `itemQueue`: 401 dla gościa i bez tokena, 404 dla nieznanego `itemId`. Akceptowalne.
+- (e) `allowed: "N"` → 400 przy GET i POST. Akceptowalne.
+
+### Uwagi nieblokujące
+
+1. `cancel_requests` ze złym JSON-em lub body niebędącym obiektem → `500`. Ten sam wzorzec jest w istniejącym
+   `renew_loans`, więc to nie regresja.
+2. `pyproject.toml` nadal ma `omnis-py>=0.2.10`. Po wydaniu `omnis-py` z `place_hold` na PyPI trzeba podbić
+   zależność, żeby testy przepływu się nie pomijały.
+3. POST `AlmaItemRequest` ignoruje `{mmsid}`/`{psid}` ze ścieżki. Bez wpływu na klientów.
+
+### Prywatność
+
+Wartości z `../omnis-py/curls/capture-artemis/` porównano z diffem i nowymi plikami. Trafienia to wyłącznie ogólne
+ciągi strukturalne (nazwy pól Primo, typy usług, statusy). Brak prawdziwych tytułów, nazw filii, `itemid`,
+barcode'ów, `mmsid` i `requestid`.
+
+### Werdykt końcowy (Faza 6)
+
+- [x] **PASS** — gotowe do Fazy 4 (deploy).
