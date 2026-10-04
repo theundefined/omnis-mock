@@ -118,7 +118,7 @@ inną serializację niż Pydantic, więc przejście testu kontraktowego w Python
 klient sparsuje tę samą odpowiedź bez wyjątku. Nazywamy tę lukę wprost, żeby nikt nie założył, że Faza 2
 ją pokrywa.
 
-## Faza 6 — zamówienia: podgląd, składanie, anulowanie (REQ-H1..REQ-H12) — **zaimplementowane (developer), czeka na QA**
+## Faza 6 — zamówienia: podgląd, składanie, anulowanie (REQ-H1..REQ-H12) — **zrobione** (QA: PASS, wdrożone jako 0.3.0 — `docs/DEPLOY_NOTES.md`)
 
 Zlecone z sesji `omnis-py` 2026-10-04, po dodaniu do `omnis-py` składania zamówień (`--place-hold`).
 Podgląd (`--requests`) i anulowanie (`--cancel-hold`) były tam już wcześniej. Kontrakt: `docs/SPEC.md`,
@@ -159,5 +159,5 @@ Faza 0 (zrobione) → Faza 0b (commit, człowiek)
   → Faza 1 (developer) → Faza 2 (qa) ──PASS──→ Faza 4 (devops) → Faza 5 (człowiek, emulator)
                                     └─FAIL─→ wraca do Fazy 1
   (Faza 3, Layer 2 — zrobione, poza tym linowym przepływem)
-  (Faza 6, zamówienia — zaimplementowane, czeka na QA: developer → qa → devops, jak Fazy 1/2/4)
+  (Faza 6, zamówienia — zrobione, QA PASS, wdrożone 0.3.0)
 ```

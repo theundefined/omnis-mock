@@ -90,3 +90,16 @@ dodatkowego kroku na tym etapie. Do ewentualnego ponownego rozważenia, jeśli/g
 - [x] Własna domena — zamknięte, nie planowana (patrz wyżej)
 - [ ] **Wymaga decyzji użytkownika przed użyciem jako konto testowe w Google Play Console**: ryzyko
   cold-start vs. timeout klienta (patrz wyżej) — bez tego recenzent może trafić na losowy błąd logowania
+
+## Wdrożenie Fazy 6 (zamówienia, REQ-H1..H12) — 2026-10-04, wersja 0.3.0
+
+- Commit `020b5d9` (autoDeploy z `main`) — nic nie wyzwalano ręcznie. Strona `/` zmieniła wersję z `0.2.0` na
+  `0.3.0` w ciągu ok. 30 s od pierwszego odpytania (instancja już była obudzona).
+- `BASE_URL=https://omnis-mock.onrender.com scripts/curl/run_all.sh`, dwa razy pod rząd: **48 PASS, 0 FAIL**
+  oba razy (zamówienie składane, widoczne w `/requests`, anulowane, znika; prolongata przez gałąź limitu
+  działa przy powtórnym przebiegu).
+- Smoke prawdziwym klientem (`omnis-py` z PyPI, izolowany `demo-client/`, bez ruszania
+  `~/.config/omnis-py`): `omnis-cli-demo --requests` pokazał rezerwację `MOCK-RE…` ("Ostatni Rejs
+  Wyobraźni", Na półce, Filia Demo 3, Cancellable = Yes) — parsowanie bez `ValidationError`.
+- Uwaga: stan (rezerwacja demo, liczba prolongat) żyje w pamięci procesu do restartu/uśpienia. Ryzyko
+  cold-start vs. timeout klienta (10 s) z sekcji wyżej pozostaje otwarte i niezmienione.
