@@ -199,6 +199,9 @@ Uruchomienie przepływu lokalnie:
 .venv/bin/python -m pytest -q            # 66 passed, 2 skipped
 ```
 
+Aktualizacja 2026-10-04: `omnis-py` 0.2.14 (z `place_hold`) jest na PyPI i minimum w `pyproject.toml` podbito do
+`>=0.2.14`. Z nim pytest daje 75 passed, bez pominięć, więc instalacja editable nie jest już potrzebna.
+
 `scripts/curl/21_holds.sh` i sekcja REQ-H w `run_all.sh` (48/48 lokalnie, dwa przebiegi pod rząd) mutują stan:
 składają i anulują jedno zamówienie.
 

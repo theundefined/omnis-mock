@@ -4,9 +4,8 @@ Dwie warstwy:
 - surowe `httpx` (limit, TTL z wstrzykniętym zegarem, seed, pułapki "holds" vs "hold", gość, 400, `allowed: "N"`),
   działa z każdym `omnis-py`;
 - pełny przepływ PRAWDZIWYM `OmnisClient` (`get_holdable_items` -> `get_hold_options` -> `place_hold` -> ...).
-  Metody składania zamówień istnieją dopiero w `omnis-py` nowszym niż PyPI-owe 0.2.13, więc te testy są
-  pomijane (`skip`), dopóki klient ich nie ma (`hasattr`, nie numer wersji). Uruchomienie lokalne:
-  `pip install -e ../omnis-py` (bez commitowania zmiany zależności).
+  Metody składania zamówień są w `omnis-py` >= 0.2.14 (minimum w `pyproject.toml`). Bramka `hasattr` zostaje
+  na wypadek starszego klienta w środowisku — wtedy te testy są pomijane (`skip`), nie wywalają się.
 """
 
 from collections.abc import AsyncIterator

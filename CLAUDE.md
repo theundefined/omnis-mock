@@ -99,8 +99,8 @@ gitignored, nigdy nie commitować.
 
 Zamówienia (REQ-H1..H12, Faza 6): `myaccount/requests`, `cancel_requests`, `itemServices/.../AlmaItemRequest`
 (GET formularz, POST złożenie), `itemQueue`; egzemplarze (`itemid`, `listofservices`) generuje `search_data.py`.
-`tests/test_holds_contract.py`; testy pełnego przepływu `OmnisClient` są pomijane na `omnis-py` z PyPI bez
-`place_hold` (uruchom z `pip install -e ../omnis-py`, szczegóły w `docs/DEV_NOTES.md`).
+`tests/test_holds_contract.py`, w tym pełny przepływ prawdziwym `OmnisClient` (wymaga `omnis-py` >= 0.2.14,
+minimum w `pyproject.toml`; na starszym kliencie te testy są pomijane, nie wywalają się).
 
 ## Nieoczywiste pułapki (pełne wyjaśnienie: docs/SPEC.md)
 
