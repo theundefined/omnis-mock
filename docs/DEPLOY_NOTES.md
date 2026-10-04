@@ -103,3 +103,15 @@ dodatkowego kroku na tym etapie. Do ewentualnego ponownego rozważenia, jeśli/g
   Wyobraźni", Na półce, Filia Demo 3, Cancellable = Yes) — parsowanie bez `ValidationError`.
 - Uwaga: stan (rezerwacja demo, liczba prolongat) żyje w pamięci procesu do restartu/uśpienia. Ryzyko
   cold-start vs. timeout klienta (10 s) z sekcji wyżej pozostaje otwarte i niezmienione.
+
+## Wdrożenie Fazy 6b (REQ-H13, książka w dwóch filiach) — 2026-10-04, wersja 0.3.1
+
+- Commit `f235631` (autoDeploy z `main`). Strona `/` zmieniła wersję z `0.3.0` na `0.3.1` po ok. 30 s
+  odpytywania (instancja już była obudzona, więc to nie jest pomiar cold-startu).
+- `BASE_URL=https://omnis-mock.onrender.com scripts/curl/run_all.sh`, dwa razy pod rząd: **54 PASS, 0 FAIL**
+  oba razy.
+- `GET pnxs/L/almaMOCK-SEARCH-D1` (curl): HTTP 200, dwa holdingi — Filia Demo 2 i Filia Demo 3.
+- Smoke prawdziwym klientem (`omnis-py` z PyPI, izolowany `demo-client/`, bez ruszania `~/.config/omnis-py`):
+  `omnis-cli-demo --search "Latarnicy Szafirowej Zatoki" -v` pokazał dwie filie: Filia Demo 2 (Available)
+  i Filia Demo 3 (Borrowed until 12/10/2026) — bez `ValidationError`.
+- Ryzyko cold-start vs. timeout klienta (10 s) z sekcji wyżej pozostaje otwarte i niezmienione.
