@@ -201,3 +201,30 @@ Uruchomienie przepływu lokalnie:
 
 `scripts/curl/21_holds.sh` i sekcja REQ-H w `run_all.sh` (48/48 lokalnie, dwa przebiegi pod rząd) mutują stan:
 składają i anulują jedno zamówienie.
+
+## Faza 6b — książka w dwóch filiach (REQ-H13)
+
+SPEC był jednoznaczny. Zrobione:
+
+- `search_data.py`: edycja ma listę `holdings` (po jednym na filię, własne `hold_id`/`holKey`/`sub_location`,
+  `due_offset_days` per holding). Istniejące edycje zostały zapisane skrótem (`holding` + `due_offset_days`),
+  który `_normalize_edition()` zamienia na `holdings` przy imporcie, więc ich identyfikatory, `hold_id` i
+  barcode'y nie drgnęły. Egzemplarz niesie wskazanie na swój holding (`spec["holding"]`), z niego biorą filię
+  `_build_item`, `catalog_hold_info` (miejsce odbioru = filia egzemplarza) i `_status_name`.
+- Nowe dzieło `MOCK-GROUP-D` „Latarnicy Szafirowej Zatoki” (Ireneusz Urojony), jedna edycja `MOCK-SEARCH-D1`:
+  Filia Demo 2 (`MOCK-HOLD-D1-FD2`, na półce, egzemplarz `MOCK-ITEM-MOCK-SEARCH-D1-FD2-1`) i Filia Demo 3
+  (`MOCK-HOLD-D1-FD3`, wypożyczony, termin +8 dni, `MOCK-ITEM-MOCK-SEARCH-D1-FD3-1`). Dzieło jest ostatnie w
+  `_WORKS`, więc barcode'y istniejących egzemplarzy się nie przesunęły (nowe: `MOCKBC0010`, `MOCKBC0011`).
+  Seria pusta, żadne słowo tytułu/autora nie koliduje z istniejącymi zapytaniami (REQ-14 dalej pusty).
+- `holding_items`: filia po `holdId` z `locations[0]`. Obcy `holdId` albo brak `holdId` przy edycji z wieloma
+  holdingami daje pustą listę (jak brak `holKey`). Przy edycji z jednym holdingiem brak `holdId` nadal pasuje do
+  jedynego holdingu, dla zgodności wstecznej. `main.py` bez zmian.
+- Testy: 7 nowych w `tests/test_holds_contract.py` (HTTP, `search_books` z PyPI-owym `omnis-py`, dwa z
+  `requires_hold_api`). `scripts/curl/run_all.sh`: sekcja REQ-H13 (składa zamówienie w FD3 i je anuluje,
+  porównuje kolejki przed/po, więc jest idempotentna).
+- Przebiegi: z `omnis-py` 0.2.14 (edytowalny) 75 passed; z 0.2.11 z PyPI 71 passed, 4 skipped.
+  `run_all.sh` lokalnie 54/54, dwa przebiegi pod rząd.
+
+Uwaga z QA (Faza 6b): `holding_items` dla edycji z JEDNYM holdingiem i jawnie podanym, nieznanym `holdId` zwraca
+teraz pustą listę (wcześniej `holdId` był ignorowany). Brak `holdId` dalej pasuje do jedynego holdingu. Prawdziwi
+klienci odsyłają holding 1:1, więc nie ma regresji.

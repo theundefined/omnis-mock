@@ -74,9 +74,11 @@ src/omnis_mock/
   data.py         fixture wypożyczeń demo-konta (aktywne + osobna historia, type=history) + stan po
                   renew_loan (in-memory, resetowany co proces); adresy/kody filii wspólne z katalogiem;
                   stan zamówień (REQ-H1..H3: limit 5, TTL 24h, seed, wstrzykiwalny zegar `set_clock`)
-  search_data.py  fixture katalogu (3 fikcyjne dzieła + 4 wygenerowane z data._LOAN_TEMPLATES, ten sam
+  search_data.py  fixture katalogu (4 fikcyjne dzieła + 4 wygenerowane z data._LOAN_TEMPLATES, ten sam
                   mmsid co odpowiedni loan, oznaczone jako unavailable) dla wyszukiwarki — bezstanowy,
-                  bez odpowiednika renew_loan
+                  bez odpowiednika renew_loan. Edycja ma listę holdingów (po jednym na filię); D1
+                  (`MOCK-SEARCH-D1`) ma dwa, FD2 na półce i FD3 wypożyczony (REQ-H13), a `holdings`
+                  wybiera filię po `holdId` z `locations[0]`
 ```
 
 Celowo brak bazy danych — to jednorazowy, bezstanowy między restartami mock, nie produkcyjny system.

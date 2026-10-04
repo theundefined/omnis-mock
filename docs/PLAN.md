@@ -152,6 +152,17 @@ mnogiej (REQ-H11), format `"<id>$$<TYPE>"` (REQ-H10a), `holKey` wciąż wymagany
 `AlmaItemRequest` i `cancel_requests` jest niezweryfikowany (oznaczony w SPEC). Gdy ktoś przechwyci
 prawdziwy, zaktualizować SPEC i `omnis-py` razem.
 
+## Faza 6b — książka w dwóch filiach (REQ-H13) — **zrobione** (QA: PASS, wersja 0.3.1)
+
+Zlecone przez użytkownika 2026-10-04 po wdrożeniu 0.3.0, żeby dało się sprawdzić rezerwowanie z wyborem filii
+(`omnis-cli --place-hold` z `--branch`, ekran zamówienia w `omnis-mobile`). Kontrakt: `docs/SPEC.md` REQ-H13.
+
+**Developer:** `search_data.py` — edycja z listą holdingów (wiele filii), egzemplarze per filia,
+`holding_items` wybiera filię po `holdId` z `locations[0]`. Istniejące identyfikatory bez zmian. Testy
+w `tests/test_holds_contract.py` (HTTP + prawdziwy `OmnisClient`: `search_books` z dwiema filiami,
+`get_holdable_items` z `branch_filter` i bez, zamówienie w jednej filii, kolejka drugiej bez zmian) oraz check
+w `scripts/curl/`. **QA**, potem **devops** (wersja 0.3.1), jak w Fazie 6.
+
 ## Kolejność w skrócie
 
 ```

@@ -1,7 +1,11 @@
 """Fixture katalogu (Layer 2 — wyszukiwarka). Kontrakt: docs/SPEC.md REQ-15..REQ-18b, pełna lista pól
 i uzasadnienie włączenia/wykluczenia: docs/API_FIELDS.md.
 
-3 fikcyjne dzieła (tytuły/autorzy jawnie zmyśleni — publiczny mock, nie przypisujemy fałszywej
+Edycja ma LISTĘ holdingów (`edition["holdings"]`, po jednym na filię; REQ-H13). Większość edycji ma jeden
+holding i jest zapisana skrótem (`holding` + `due_offset_days` na poziomie edycji), który `_normalize_edition()`
+zamienia na `holdings` przy imporcie modułu; tylko `_EDITIONS_D` zapisuje `holdings` wprost.
+
+4 fikcyjne dzieła (tytuły/autorzy jawnie zmyśleni — publiczny mock, nie przypisujemy fałszywej
 dostępności możliwej do zidentyfikowania osobie) + 4 dzieła wygenerowane z `data._LOAN_TEMPLATES`
 (zobacz `_works_from_loans()` niżej) — bez tych ostatnich wyszukiwarka i konto demo pokazywałyby dwa
 rozłączne zbiory książek: tytuł wypożyczony na koncie demo nigdy nie dałoby się znaleźć w katalogu, co
@@ -103,6 +107,49 @@ _EDITIONS_C: list[dict[str, Any]] = [
     },
 ]
 
+# REQ-H13: jedna edycja, egzemplarze w DWÓCH filiach: FD2 na półce, FD3 wypożyczony (termin w przyszłości).
+# Każdy holding ma własny `hold_id`/`holKey` i własny egzemplarz (`item_prefix` -> `MOCK-ITEM-<mmsid>-FD2-1`).
+_EDITIONS_D: list[dict[str, Any]] = [
+    {
+        "mmsid": "MOCK-SEARCH-D1",
+        "edition_label": "Wydanie I",
+        "date": "2023",
+        "isbn": "9788300000042",
+        "format_display": "256 stron : mapy ; 22 cm.",
+        "holdings": [
+            {
+                "main_location": "Filia Demo 2",
+                "library_code": "FD2",
+                "sub_location": "ul. Próbna 2",
+                "sub_location_code": "FD2dz",
+                "availability_status": "available",
+                "hold_id": "MOCK-HOLD-D1-FD2",
+                "stack_map_url": "https://maps.app.goo.gl/mockD1FD2",
+                "item_prefix": "FD2-",
+                "due_offset_days": None,
+            },
+            {
+                "main_location": "Filia Demo 3",
+                "library_code": "FD3",
+                "sub_location": "ul. Demowa 3",
+                "sub_location_code": "FD3dz",
+                "availability_status": "unavailable",
+                "hold_id": "MOCK-HOLD-D1-FD3",
+                "stack_map_url": "https://maps.app.goo.gl/mockD1FD3",
+                "item_prefix": "FD3-",
+                "due_offset_days": 8,
+            },
+        ],
+    },
+]
+
+
+def _normalize_edition(edition: dict[str, Any]) -> dict[str, Any]:
+    """Skrót `holding` + `due_offset_days` (jedna filia) -> `holdings: [...]` z `due_offset_days` w holdingu."""
+    if "holdings" not in edition:
+        edition["holdings"] = [{**edition.pop("holding"), "due_offset_days": edition.pop("due_offset_days")}]
+    return edition
+
 
 # SPEC.md REQ-G6: seria (`addata.seriestitle`) dla dzieł z wypożyczeń demo, w prawdziwym formacie Primo —
 # dwa tomy tej samej serii z RÓŻNYM zapisem tomu/odpowiedzialności (omnis-mobile tnie nazwę serii na
@@ -200,7 +247,24 @@ _WORKS: list[dict[str, Any]] = [
         "editions": _EDITIONS_C,
     },
     *_works_from_loans(),
+    # Na końcu: barcode'y egzemplarzy liczą się z kolejności w `_ITEMS`, więc nowe dzieło nie przesuwa istniejących.
+    {
+        "frbrgroupid": "MOCK-GROUP-D",
+        "title": "Latarnicy Szafirowej Zatoki",
+        "author": "Ireneusz Urojony",
+        "genres": ["Przygodowa"],
+        "subjects": ["Morze", "Latarnie morskie"],
+        "series": None,
+        "language": "pol",
+        "publisher": "Wydawnictwo Kompas",
+        "place": "Gdańsk",
+        "editions": _EDITIONS_D,
+    },
 ]
+
+for _w in _WORKS:
+    for _e in _w["editions"]:
+        _normalize_edition(_e)
 
 _MMSID_TO_WORK_EDITION: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
     edition["mmsid"]: (work, edition) for work in _WORKS for edition in work["editions"]
@@ -231,14 +295,27 @@ _REQUEST_PATH = "/primaws/rest/priv/ILSServices/itemServices/{mmsid}/item/{item_
 
 
 def _item_specs(edition: dict[str, Any]) -> list[dict[str, Any]]:
-    primary = {
-        "suffix": "1",
-        "allowed": "Y",
-        "category": "Wypożyczane na 30 dni",
-        "policy": "Wypożyczane na 30 dni",
-        "callnumber2": "821.162.1-3",
-    }
-    return [primary, *_EXTRA_ITEMS.get(edition["mmsid"], [])]
+    """Egzemplarze edycji: po jednym głównym na holding (sufiks `<item_prefix>1`), a dodatkowe z `_EXTRA_ITEMS`
+    wpadają do pierwszego holdingu. `spec["holding"]` wskazuje filię egzemplarza."""
+    specs = []
+    for index, holding in enumerate(edition["holdings"]):
+        prefix = holding.get("item_prefix", "")
+        specs.append(
+            {
+                "suffix": f"{prefix}1",
+                "primary": True,
+                "holding": holding,
+                "allowed": "Y",
+                "category": "Wypożyczane na 30 dni",
+                "policy": "Wypożyczane na 30 dni",
+                "callnumber2": "821.162.1-3",
+            }
+        )
+        if index == 0:
+            specs += [
+                {"primary": False, "holding": holding, **extra} for extra in _EXTRA_ITEMS.get(edition["mmsid"], [])
+            ]
+    return specs
 
 
 def _library_id(library_code: str) -> str:
@@ -349,7 +426,7 @@ def _build_pnx(work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_holding(edition: dict[str, Any]) -> dict[str, Any]:
+def _build_holding(edition: dict[str, Any], h: dict[str, Any]) -> dict[str, Any]:
     """Pełny (23-polowy) `holding`, jak realne `delivery.holding[]` (docs/API_FIELDS.md). Wartości bez
     znaczenia funkcjonalnego dla żadnego znanego klienta są stałymi, realistycznymi placeholderami.
 
@@ -357,7 +434,6 @@ def _build_holding(edition: dict[str, Any]) -> dict[str, Any]:
     `ILSServices/holdings` (REQ-18b) — `omnis-py` przekazuje cały ten dict 1:1 z powrotem w kolejnym
     żądaniu, więc obecność `holKey` tutaj jest tym, co sprawia, że termin zwrotu w ogóle się rozwiązuje.
     """
-    h = edition["holding"]
     mmsid = edition["mmsid"]
     return {
         "isValidUser": True,
@@ -475,7 +551,7 @@ def delivery(alma_ids: list[str]) -> list[dict[str, Any]]:
                 results.append(
                     {
                         "pnx": {"control": {"recordid": [recordid]}},
-                        "delivery": {"holding": [_build_holding(edition)]},
+                        "delivery": {"holding": [_build_holding(edition, h) for h in edition["holdings"]]},
                     }
                 )
     return results
@@ -492,7 +568,10 @@ def record(record_id: str) -> Optional[dict[str, Any]]:
     if pair is None:
         return None
     work, edition = pair
-    return {"pnx": _build_pnx(work, edition), "delivery": {"holding": [_build_holding(edition)]}}
+    return {
+        "pnx": _build_pnx(work, edition),
+        "delivery": {"holding": [_build_holding(edition, h) for h in edition["holdings"]]},
+    }
 
 
 def physical_service_id(bare_mmsid: str) -> Optional[str]:
@@ -505,11 +584,11 @@ def physical_service_id(bare_mmsid: str) -> Optional[str]:
     return f"PS-{bare_mmsid}"
 
 
-def _status_name(edition: dict[str, Any], spec: dict[str, Any]) -> str:
-    """`itemstatusname` egzemplarza. Wypożyczony (`due_offset_days`) niesie datę `dd/mm/rrrr` (REQ-18b),
+def _status_name(spec: dict[str, Any]) -> str:
+    """`itemstatusname` egzemplarza. Wypożyczony (`due_offset_days` holdingu) niesie datę `dd/mm/rrrr` (REQ-18b),
     z „przekroczon…” gdy termin minął; reszta stoi na półce."""
-    due_offset_days = edition["due_offset_days"]
-    if due_offset_days is None or spec["suffix"] != "1":
+    due_offset_days = spec["holding"]["due_offset_days"]
+    if due_offset_days is None or not spec["primary"]:
         return "Egzemplarz na półce"
     date_str = (date.today() + timedelta(days=due_offset_days)).strftime("%d/%m/%Y")
     if due_offset_days < 0:
@@ -519,7 +598,7 @@ def _status_name(edition: dict[str, Any], spec: dict[str, Any]) -> str:
 
 def _build_item(work: dict[str, Any], edition: dict[str, Any], spec: dict[str, Any], barcode: str) -> dict[str, Any]:
     """Pełny `items[]` z `ILSServices/holdings` (REQ-H9), pola czytane przez `omnis-py`."""
-    h = edition["holding"]
+    h = spec["holding"]
     mmsid = edition["mmsid"]
     item_id = f"MOCK-ITEM-{mmsid}-{spec['suffix']}"
     link = (
@@ -530,7 +609,7 @@ def _build_item(work: dict[str, Any], edition: dict[str, Any], spec: dict[str, A
         "itemid": item_id,
         "mmsid": mmsid,
         "itembarcode": barcode,
-        "itemstatusname": _status_name(edition, spec),
+        "itemstatusname": _status_name(spec),
         "itemcategoryname": spec["category"],
         "itempolicy": spec["policy"],
         "itemmaterial": "Książka",
@@ -568,10 +647,20 @@ def holding_items(
     if not request_holding or not request_holding.get("holKey"):
         return None
     work, edition = pair
-    h = edition["holding"]
+    # REQ-H13: filię wskazuje `holdId`. Brak `holdId` pasuje tylko do edycji z jednym holdingiem (zgodność
+    # wsteczna); `holdId` nieznany tej edycji -> pusta lista, jak brak `holKey`.
+    hold_id = request_holding.get("holdId")
+    holdings = edition["holdings"]
+    if hold_id is None and len(holdings) == 1:
+        h = holdings[0]
+    else:
+        h = next((c for c in holdings if c["hold_id"] == hold_id), None)
+        if h is None:
+            return None
     items = [
         _build_item(work, edition, spec, _ITEMS[f"MOCK-ITEM-{edition['mmsid']}-{spec['suffix']}"][3])
         for spec in _item_specs(edition)
+        if spec["holding"] is h
     ]
     return {"main-location": h["main_location"], "sub-location": h["sub_location"], "items": items}
 
@@ -585,12 +674,14 @@ def item_mmsid(item_id: str) -> Optional[str]:
 def catalog_hold_info(mmsid: str, item_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Dane potrzebne do złożenia zamówienia (tytuł i autor jak w `pnx.display`, miejsca odbioru). Bez
     `item_id` bierze pierwszy egzemplarz edycji. `None` dla nieznanej edycji/egzemplarza."""
-    item_id = item_id or f"MOCK-ITEM-{mmsid}-1"
+    if item_id is None:
+        pair = _MMSID_TO_WORK_EDITION.get(mmsid)
+        item_id = f"MOCK-ITEM-{mmsid}-{_item_specs(pair[1])[0]['suffix']}" if pair else ""
     found = _ITEMS.get(item_id)
     if found is None:
         return None
     work, edition, spec, _ = found
-    h = edition["holding"]
+    h = spec["holding"]
     return {
         "mmsid": edition["mmsid"],
         "item_id": item_id,

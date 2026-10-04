@@ -684,3 +684,38 @@ barcode'ów, `mmsid` i `requestid`.
 ### Werdykt końcowy (Faza 6)
 
 - [x] **PASS** — gotowe do Fazy 4 (deploy).
+
+---
+
+## Faza 6b — książka w dwóch filiach (REQ-H13)
+
+**Werdykt: PASS** (bez blokujących REQ). Weryfikacja: 2026-10-04. Sekcję zapisał orkiestrator z raportu roli
+`qa`, która nie ma `Write`/`Edit`.
+
+Testy:
+- `omnis-py` 0.2.11 (PyPI): 71 passed, 4 skipped.
+- `omnis-py` editable (lokalny, z `place_hold`): 75 passed.
+- ruff i black: czyste.
+- `scripts/curl/run_all.sh` na lokalnym serwerze, 2 przebiegi pod rząd: 54 PASS, 0 FAIL.
+- Po weryfikacji przywrócono `omnis-py==0.2.11`.
+
+| Wymaganie REQ-H13 | Wynik |
+|---|---|
+| `delivery` i `pnxs/L/alma`: 2 holdingi (FD2 available, FD3 unavailable), różne `libraryCode`/`mainLocation`/`holdId`/`holKey` | PASS |
+| `holdings`: tylko egzemplarze filii z `holdId`; bez `holKey`, z obcym `holdId` albo bez `holdId` (przy 2 holdingach) pusta lista | PASS |
+| `itemid` i `link-to-service` unikalne, `allowed: "Y"` | PASS |
+| Formularz egzemplarza: pickup tylko z jego filii (obcy pickup = 400) | PASS |
+| `search_books`: 2 filie, FD3 z terminem zwrotu (+8 dni) | PASS |
+| `get_holdable_items`: 2 egzemplarze; `branch_filter` zawęża do jednej filii | PASS |
+| Zamówienie w jednej filii zmienia tylko jej kolejkę, `pickuplocationname` poprawne, po anulowaniu kolejki wracają do 0 | PASS |
+| Identyfikatory istniejących egzemplarzy/edycji/`hold_id`/`holKey`/barcode'ów i seed `MOCK-REQ-0001` bez zmian względem HEAD (porównanie programowe, stare edycje bajt w bajt) | PASS |
+| Nowa książka nie zmienia REQ-14, wyszukiwania po autorze i serii ani REQ-H7 (`MOCK-SEARCH-D1` daje 1 rekord) | PASS |
+
+Uwagi (nieblokujące):
+1. `holding_items`: stara edycja z jednym holdingiem i jawnie podanym, nieznanym `holdId` zwraca teraz pustą
+   listę (w HEAD `holdId` był ignorowany). To zgodne ze SPEC, a prawdziwi klienci przekazują holding 1:1.
+   Odnotowane w `DEV_NOTES.md`.
+2. `_item_specs`: `_EXTRA_ITEMS` trafiają zawsze do pierwszego holdingu edycji. Przy przyszłej edycji
+   wielofiliowej z dodatkowymi egzemplarzami trzeba to uwzględnić.
+3. Zapytania jednoliterowe trafiają teraz też w nową książkę (dopasowanie podciągiem, REQ-15). Bez wpływu na
+   testy i skrypty.

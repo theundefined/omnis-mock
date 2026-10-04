@@ -87,6 +87,10 @@ na zachowanie API.
 
 ## `delivery.holding[]` (obiekt zwracany w `POST /primaws/rest/pub/delivery`)
 
+Jedna edycja ma po jednym elemencie `holding[]` na filię. W mocku większość edycji ma jedną filię, ale
+`MOCK-SEARCH-D1` ma dwie (REQ-H13), każdą z własnym `holdId` i `holKey`. `ILSServices/holdings` rozpoznaje
+filię po `holdId` z `locations[0]` i zwraca tylko jej egzemplarze.
+
 | Pole | Realny Primo | `omnis-py` | `omnis-mobile` | W mocku | Uwagi |
 |---|---|---|---|---|---|
 | `mainLocation` | ✅ | ✅ | ✅ | ✅ | |

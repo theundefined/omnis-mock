@@ -329,6 +329,54 @@ ok=$(curl -sS "$BASE_URL/primaws/rest/pub/getPhysicalService/MOCK-SEARCH-A1" |
     python3 -c "import json,sys; print(json.load(sys.stdin)['physicalServiceId'] == 'PS-MOCK-SEARCH-A1')" 2>/dev/null || echo "brak")
 check_true "getPhysicalService także dla edycji dostępnej" "$ok"
 
+echo "-- REQ-H13 (MUTUJE stan: składa i anuluje jedno zamówienie w filii Demo 3) --"
+D1="MOCK-SEARCH-D1"
+D1_FD2="MOCK-ITEM-$D1-FD2-1"
+D1_FD3="MOCK-ITEM-$D1-FD3-1"
+D1_HOLDINGS=$(curl -sS -X POST "$BASE_URL/primaws/rest/pub/delivery" -H "Content-Type: application/json" -d "[\"alma$D1\"]")
+ok=$(echo "$D1_HOLDINGS" | python3 -c "
+import json, sys
+h = json.load(sys.stdin)[0]['delivery']['holding']
+print([x['libraryCode'] for x in h] == ['FD2', 'FD3'] and all(x['holKey'] for x in h))" 2>/dev/null || echo "błąd parsowania")
+check_true "delivery dla edycji w dwóch filiach -> 2 holdingi z holKey" "$ok"
+ok=$(for idx in 0 1; do
+    holding=$(echo "$D1_HOLDINGS" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)[0]['delivery']['holding'][$idx]))")
+    curl -sS -X POST "$BASE_URL/primaws/rest/priv/ILSServices/holdings/PS-$D1" -H "Content-Type: application/json" \
+        -d "{\"locations\":[$holding]}" | python3 -c "
+import json, sys
+items = json.load(sys.stdin)['data']['itemInfo']['locations'][0]['items']
+print([i['itemid'] for i in items])"
+done | tr '\n' ' ')
+[ "$ok" = "['$D1_FD2'] ['$D1_FD3'] " ] && ok=True
+check_true "holdings każdej filii -> tylko jej egzemplarz" "$ok"
+d1_queue() {
+    curl -sS "$BASE_URL/primaws/rest/priv/ILSServices/itemQueue/$1?lang=pl" "${HOLD_AUTH[@]}" |
+        python3 -c "import json,re,sys; print(re.search(r'\d+', json.load(sys.stdin)['itemQueueString']).group())"
+}
+q2_before=$(d1_queue "$D1_FD2"); q3_before=$(d1_queue "$D1_FD3")
+D1_URL="$BASE_URL/primaws/rest/priv/ILSServices/itemServices/$D1/item/$D1_FD3/PS-$D1/AlmaItemRequest"
+ok=$(curl -sS "$D1_URL?lang=pl" "${HOLD_AUTH[@]}" | python3 -c "
+import json, sys
+keys = [p['key'] for p in json.load(sys.stdin)['services-arr']['services'][0]['groups-list-map'][0]['pickupLocation']]
+print(keys == ['MOCKLIB-FD3\$\$LIBRARY'])" 2>/dev/null || echo "błąd parsowania")
+check_true "formularz egzemplarza FD3 -> miejsce odbioru tylko Filia Demo 3" "$ok"
+curl -sS -o /dev/null -X POST "$D1_URL?lang=pl" "${HOLD_AUTH[@]}" -H "Content-Type: application/json" -d "{\"requestType\":\"hold\",\"pickupLocation\":\"MOCKLIB-FD3\",\"materialType\":\"BOOK\",\"itemId\":\"$D1_FD3\",\"group_id\":\"$D1\",\"pickupLibraryId\":\"MOCKLIB-FD3\",\"pickupType\":\"LIBRARY\"}"
+q2_after=$(d1_queue "$D1_FD2"); q3_after=$(d1_queue "$D1_FD3")
+ok=$([ "$q3_after" = "$((q3_before + 1))" ] && [ "$q2_after" = "$q2_before" ] && echo True || echo "FD3 $q3_before->$q3_after, FD2 $q2_before->$q2_after")
+check_true "zamówienie w FD3 -> +1 w kolejce FD3, FD2 bez zmian" "$ok"
+D1_HOLD=$(curl -sS "$BASE_URL/primaws/rest/priv/myaccount/requests?lang=pl" "${HOLD_AUTH[@]}" |
+    python3 -c "
+import json, sys
+mine = [h for h in json.load(sys.stdin)['data']['holds']['hold'] if h['mmsid'] == '$D1']
+print(mine[-1]['requestid'], mine[-1]['pickuplocationname'].replace(' ', '_'))")
+read -r D1_HOLD_ID D1_PICKUP <<<"$D1_HOLD"
+ok=$([ "$D1_PICKUP" = "Filia_Demo_3" ] && echo True || echo "pickuplocationname: $D1_PICKUP")
+check_true "zamówienie w /requests -> odbiór w Filii Demo 3" "$ok"
+curl -sS -o /dev/null -X POST "$BASE_URL/primaws/rest/priv/myaccount/cancel_requests?lang=pl" "${HOLD_AUTH[@]}" \
+    -H "Content-Type: application/json" -d "{\"request_id\":\"$D1_HOLD_ID\",\"request_type\":\"holds\"}"
+ok=$([ "$(d1_queue "$D1_FD3")" = "$q3_before" ] && echo True || echo "kolejka FD3 po anulowaniu: $(d1_queue "$D1_FD3")")
+check_true "po anulowaniu kolejka FD3 wraca do stanu wyjściowego" "$ok"
+
 echo
 echo "=== Podsumowanie: $PASS PASS, $FAIL FAIL ==="
 [ "$FAIL" -eq 0 ]

@@ -22,8 +22,8 @@ Layer 1 (konto demo, login, wypożyczenia, prolongata — REQ-1..REQ-13b), Layer
 REQ-14..REQ-18b, `docs/PLAN.md` Faza 3) oraz anonimowe wyszukiwanie tokenem gościa i wyszukiwanie po
 autorze (REQ-G1..REQ-G5), a także wyszukiwanie po serii i rekord `pnxs/L/alma{mmsid}` (REQ-G6) są
 zaimplementowane i muszą działać. Do tego pełny kształt wypożyczeń dla okna „Szczegóły” w omnis-mobile
-i osobna historia wypożyczeń (REQ-L1..REQ-L5). Zamówienia (podgląd `/requests`, składanie, anulowanie — REQ-H1..REQ-H12) są wyspecyfikowane, ale
-jeszcze **nie zaimplementowane** (`docs/PLAN.md` Faza 6). `/fines` i pokrewne pozostają poza zakresem — patrz
+i osobna historia wypożyczeń (REQ-L1..REQ-L5). Zamówienia (podgląd `/requests`, składanie, anulowanie — REQ-H1..REQ-H13, `docs/PLAN.md` Fazy 6 i 6b) są
+zaimplementowane. `/fines` i pokrewne pozostają poza zakresem — patrz
 „Poza zakresem” niżej.
 
 ### Konto demo
@@ -327,7 +327,7 @@ Wywołanie aplikacji: `?isGuest=true&lang=pl&targetUrl=<dowolny URL>&viewId=MOCK
   []}`, **bez `pnx`**. Tak odpowiada prawdziwe Primo, **nie** `404`. `omnis-mobile` zapisuje to jako
   „sprawdzone, bez serii” i nie ponawia zapytania.
 
-### Zamówienia (rezerwacje): podgląd, składanie, anulowanie — REQ-H1..REQ-H12 (do zaimplementowania, `docs/PLAN.md` Faza 6)
+### Zamówienia (rezerwacje): podgląd, składanie, anulowanie — REQ-H1..REQ-H13 (`docs/PLAN.md` Fazy 6 i 6b)
 
 Źródło prawdy: `omnis-py` ≥ v0.2.14 (`get_requests()`, `cancel_hold()`, `get_holdable_items()`,
 `get_hold_options()`, `place_hold()`, `get_item_queue()` w `src/omnis/client.py` i opis przepływu w
@@ -512,6 +512,32 @@ nie jest zweryfikowane, więc `401` to założenie mocka.
   aktywnych zamówień na ten egzemplarz. Tekst po polsku, dokładnie w tym formacie (zaobserwowany na żywo).
 
 
+#### Książka w dwóch filiach — REQ-H13 (`docs/PLAN.md` Faza 6b)
+
+W prawdziwym Primo jedna edycja (jeden MMS id) ma zwykle egzemplarze w kilku filiach: `delivery.holding[]` ma
+wtedy po jednym elemencie na filię, a `omnis-py` woła `ILSServices/holdings` osobno dla każdego z nich
+(`locations` = ten jeden holding). Dotąd każda edycja w mocku miała dokładnie jedną filię, więc przepływ
+zamówienia nigdy nie musiał wybierać filii, a `get_holdable_items(..., branch_filter=...)` nie miał czego
+odfiltrowywać.
+
+- **REQ-H13**: katalog zawiera co najmniej jedną fikcyjną edycję (nowe dzieło, nowy fikcyjny autor, tytuł bez
+  pospolitych słów, żeby nie zepsuć REQ-14) z egzemplarzami w **dwóch różnych filiach**:
+  - `delivery` (REQ-17) i `pnxs/L/alma{mmsid}` (REQ-G6) zwracają dla niej **dwa** elementy `holding`, każdy z
+    własnym `libraryCode`, `mainLocation`, `holdId` i `holKey`. Jedna filia ma egzemplarz na półce
+    (`availabilityStatus: "available"`), druga wypożyczony (`"unavailable"`, termin zwrotu w przyszłości).
+  - `ILSServices/holdings` (REQ-18b/REQ-H9) zwraca egzemplarze **tylko tej filii**, której holding przyszedł w
+    `locations[0]` (rozpoznanie po `holdId`). Holding bez `holKey` dalej daje pustą listę. Wypożyczony egzemplarz
+    niesie datę w `itemstatusname`, więc `omnis-py` `search_books` pokazuje dwie filie, w tym jedną z terminem
+    zwrotu.
+  - Każdy egzemplarz ma własny, unikalny `itemid` i `link-to-service`, oba z `allowed: "Y"`. Formularz
+    (REQ-H10a) oferuje jako miejsce odbioru filię, która ma ten egzemplarz, tak jak w prawdziwym BRACZ.
+  - `get_holdable_items(mmsid)` zwraca dwa egzemplarze (po jednym na filię). `branch_filter` z nazwą jednej
+    filii zwraca tylko jej egzemplarz.
+  - Zamówienie złożone na egzemplarz jednej filii zwiększa kolejkę (REQ-H12) tylko tego egzemplarza. W
+    REQ-H4 ma `pickuplocationname` tej filii.
+  - Identyfikatory istniejących egzemplarzy, edycji i seeda (REQ-H3) się **nie zmieniają**: używają ich testy,
+    `scripts/curl/` i stan na żywym deployu.
+
 ## Endpointy pomocnicze (poza kontraktem Primo)
 
 Nie są częścią API, którego oczekuje `OmnisClient`/`omnis-mobile` — nie testuje ich `tests/test_contract.py`
@@ -542,7 +568,7 @@ i żaden REQ-numer ich nie obejmuje. Istnieją wyłącznie dla człowieka trafia
   To jest **REQ-format-kontrastowy** do REQ-7 wyżej — jeśli kiedyś implementujesz `/fines`, NIE używaj tam
   formatu z kropką.
 - `/primaws/rest/priv/myaccount/personal_settings`. (`/requests` i `cancel_requests` przeniesione do
-  REQ-H1..REQ-H12.)
+  REQ-H1..REQ-H13.)
 
 ## Dane demo (fixture)
 

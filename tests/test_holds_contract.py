@@ -365,3 +365,113 @@ async def test_holdable_items_for_loaned_edition_and_branch_filter(client: Omnis
     assert [i.item_id for i in items] == [ITEM_A2]
     assert items[0].status_name and "przekroczon" in items[0].status_name
     assert await client.get_holdable_items("MOCK-SEARCH-A2", branch_filter="nie ma takiej") == []
+
+
+# --- REQ-H13: jedna edycja, egzemplarze w dwóch filiach ------------------------------------------------------------
+
+MMS_D1 = "MOCK-SEARCH-D1"
+ITEM_D1_FD2 = "MOCK-ITEM-MOCK-SEARCH-D1-FD2-1"  # na półce
+ITEM_D1_FD3 = "MOCK-ITEM-MOCK-SEARCH-D1-FD3-1"  # wypożyczony
+TWO_BRANCH_TITLE = "Latarnicy Szafirowej Zatoki"
+
+
+async def _d1_holdings(http: httpx.AsyncClient) -> list[dict]:
+    delivery = await http.post("/primaws/rest/pub/delivery", json=[f"alma{MMS_D1}"])
+    return delivery.json()[0]["delivery"]["holding"]
+
+
+async def _holdings_for(http: httpx.AsyncClient, holding: dict) -> list[dict]:
+    response = await http.post(f"/primaws/rest/priv/ILSServices/holdings/PS-{MMS_D1}", json={"locations": [holding]})
+    locations = response.json()["data"]["itemInfo"]["locations"]
+    return locations[0]["items"] if locations else []
+
+
+async def test_two_branch_delivery_and_record_have_two_holdings_with_holkey(http: httpx.AsyncClient) -> None:
+    record = (await http.get(f"/primaws/rest/pub/pnxs/L/alma{MMS_D1}")).json()
+    for holdings in (await _d1_holdings(http), record["delivery"]["holding"]):
+        assert [(h["libraryCode"], h["mainLocation"], h["availabilityStatus"]) for h in holdings] == [
+            ("FD2", "Filia Demo 2", "available"),
+            ("FD3", "Filia Demo 3", "unavailable"),
+        ]
+        assert all(h["holKey"] for h in holdings)
+        assert len({h["holdId"] for h in holdings}) == 2 and len({h["holKey"] for h in holdings}) == 2
+
+
+async def test_two_branch_holdings_return_only_items_of_their_own_branch(http: httpx.AsyncClient) -> None:
+    fd2, fd3 = await _d1_holdings(http)
+    items_fd2, items_fd3 = await _holdings_for(http, fd2), await _holdings_for(http, fd3)
+    assert [(i["itemid"], i["mainlocationname"]) for i in items_fd2] == [(ITEM_D1_FD2, "Filia Demo 2")]
+    assert [(i["itemid"], i["mainlocationname"]) for i in items_fd3] == [(ITEM_D1_FD3, "Filia Demo 3")]
+    assert items_fd2[0]["itemstatusname"] == "Egzemplarz na półce"
+    due = (datetime.now() + timedelta(days=8)).strftime("%d/%m/%Y")
+    assert items_fd3[0]["itemstatusname"] == f"Wypożyczenie do {due}"
+    links = [i["listofservices"]["service"][0]["link-to-service"] for i in (*items_fd2, *items_fd3)]
+    assert len(set(links)) == 2 and len({i["itemid"] for i in (*items_fd2, *items_fd3)}) == 2
+    assert len({i["itembarcode"] for i in (*items_fd2, *items_fd3)}) == 2
+    assert all(i["listofservices"]["service"][0]["allowed"] == "Y" for i in (*items_fd2, *items_fd3))
+    for item, other in ((items_fd2[0], fd3), (items_fd3[0], fd2)):
+        assert item["mainlocationname"] != other["mainLocation"]
+
+
+async def test_two_branch_holdings_without_holkey_or_with_foreign_holdid_are_empty(http: httpx.AsyncClient) -> None:
+    fd2, fd3 = await _d1_holdings(http)
+    assert await _holdings_for(http, {k: v for k, v in fd3.items() if k != "holKey"}) == []
+    assert await _holdings_for(http, {**fd3, "holdId": "MOCK-HOLD-OBCY"}) == []
+    # `holdId` z innej edycji (A1) też jest obcy; brak `holdId` przy dwóch holdingach nie wskazuje filii.
+    assert await _holdings_for(http, {**fd2, "holdId": "MOCK-HOLD-A1"}) == []
+    assert await _holdings_for(http, {k: v for k, v in fd2.items() if k != "holdId"}) == []
+
+
+async def test_two_branch_form_offers_pickup_of_the_items_own_branch(
+    client: OmnisClient, http: httpx.AsyncClient
+) -> None:
+    for item_id, library, name in (
+        (ITEM_D1_FD2, "MOCKLIB-FD2", "Filia Demo 2"),
+        (ITEM_D1_FD3, "MOCKLIB-FD3", "Filia Demo 3"),
+    ):
+        response = await http.get(_item_url(MMS_D1, item_id), headers=_auth(client), params={"lang": "pl"})
+        group = response.json()["services-arr"]["services"][0]["groups-list-map"][0]
+        assert [(p["key"], p["value"]) for p in group["pickupLocation"]] == [(f"{library}$$LIBRARY", name)]
+    # Odbiór w filii, której egzemplarz nie ma w formularzu, jest odrzucany.
+    wrong = await _place(http, client, MMS_D1, ITEM_D1_FD3, pickup="MOCKLIB-FD2")
+    assert wrong.status_code == 400
+
+
+async def test_two_branch_search_books_via_real_client(client: OmnisClient) -> None:
+    """Działa na omnis-py z PyPI: dwie filie z jednej edycji, jedna dostępna, druga z terminem zwrotu."""
+    results = await client.search_books(TWO_BRANCH_TITLE)
+    assert len(results) == 1 and len(results[0].versions) == 1
+    version = results[0].versions[0]
+    assert version.mmsid == MMS_D1
+    by_name = {b.library_name: b for b in version.branches}
+    assert set(by_name) == {"Filia Demo 2", "Filia Demo 3"}
+    assert by_name["Filia Demo 2"].status == "available" and by_name["Filia Demo 2"].due_date is None
+    assert by_name["Filia Demo 3"].status == "unavailable"
+    assert by_name["Filia Demo 3"].due_date == (datetime.now() + timedelta(days=8)).strftime("%d/%m/%Y")
+    assert by_name["Filia Demo 3"].overdue is False
+
+
+@requires_hold_api
+async def test_two_branch_holdable_items_and_branch_filter(client: OmnisClient) -> None:
+    items = await client.get_holdable_items(MMS_D1)
+    assert sorted(i.item_id for i in items) == [ITEM_D1_FD2, ITEM_D1_FD3]
+    assert {i.item_id: i.main_location for i in items} == {ITEM_D1_FD2: "Filia Demo 2", ITEM_D1_FD3: "Filia Demo 3"}
+    filtered = await client.get_holdable_items(MMS_D1, branch_filter="Demo 3")
+    assert [i.item_id for i in filtered] == [ITEM_D1_FD3]
+
+
+@requires_hold_api
+async def test_two_branch_place_hold_affects_only_that_branch_queue(client: OmnisClient) -> None:
+    (item,) = await client.get_holdable_items(MMS_D1, branch_filter="Demo 3")
+    options = await client.get_hold_options(item)
+    assert [p.id for p in options.pickup_locations] == ["MOCKLIB-FD3"]
+    assert await client.get_item_queue(ITEM_D1_FD3) == "(zamówienie: 0)"
+    await client.place_hold(options, options.pickup_locations[0])
+
+    assert await client.get_item_queue(ITEM_D1_FD3) == "(zamówienie: 1)"
+    assert await client.get_item_queue(ITEM_D1_FD2) == "(zamówienie: 0)"
+    mine = next(r.hold for r in await client.get_requests() if r.hold and r.hold.mmsid == MMS_D1)
+    assert mine.pickup_location == "Filia Demo 3"
+
+    await client.cancel_hold(mine.request_id)
+    assert await client.get_item_queue(ITEM_D1_FD3) == "(zamówienie: 0)"
